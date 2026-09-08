@@ -1,0 +1,32 @@
+version: '3.8'
+
+networks:
+  digitalfix-net:
+    name: digitalfix-net
+    driver: bridge
+
+services:
+  rabbitmq-node1:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq-node1
+    hostname: rabbitmq-node1
+    environment:
+      RABBITMQ_ERLANG_COOKIE: 'DIGITALFIX_SECRET_COOKIE_123'
+      RABBITMQ_DEFAULT_USER: 'digitalfix'
+      RABBITMQ_DEFAULT_PASS: 'digitalfix_pass'
+    ports:
+      - "5672:5672"   # Puerto AMQP para los microservicios
+      - "15672:15672" # Puerto de la interfaz web de gestión
+    networks:
+      - digitalfix-net
+
+  rabbitmq-node2:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq-node2
+    hostname: rabbitmq-node2
+    environment:
+      RABBITMQ_ERLANG_COOKIE: 'DIGITALFIX_SECRET_COOKIE_123'
+    depends_on:
+      - rabbitmq-node1
+    networks:
+      - digitalfix-net
