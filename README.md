@@ -42,7 +42,7 @@ El sistema se desarrolla bajo una estrategia multi-repo: un repositorio por cada
 | Repositorio | Organizacion | Tecnologia | Responsabilidad | Exposicion |
 |---|---|---|---|---|
 | [digitalfix-frontend](https://github.com/Blacknight3648/digitalfix-frontend.git) | Blacknight3648 | Angular + MSAL | Interfaz de usuario, login corporativo, consumo del API Gateway. | Publica (SPA) |
-| [digitalfix-ms-login](https://github.com/Blacknight3648/digitalfix-ms-login.git) | Blacknight3648 | Spring Boot | Autenticacion/sesion de aplicacion e integracion con el flujo de identidad. | `/api/login/*` |
+| [digitalfix-ms-login](https://github.com/Blacknight3648/digitalfix-ms-login.git) | Blacknight3648 | Spring Boot + Oracle | Autenticacion/sesion de aplicacion e integracion con el flujo de identidad; auditoria de intentos de login. | `/api/v1/login/*`, `/api/v1/audit/*` |
 | [digitalfix-ms-user](https://github.com/Blacknight3648/digitalfix-ms-user.git) | Blacknight3648 | Spring Boot | Gestion de usuarios y roles de dominio. | `/api/users/*` |
 | [digitalfix-ms-workorders](https://github.com/Blacknight3648/digitalfix-ms-workorders.git) | Blacknight3648 | Spring Boot + Oracle | CRUD de ordenes de trabajo y maquina de estados. | `/api/workorders/*` |
 | [digitalfix-ms-notify](https://github.com/Blacknight3648/digitalfix-ms-notify.git) | Blacknight3648 | Spring Boot + RabbitMQ | Consumidor de colas; envio de notificaciones y tickets de despacho. | Sin exposicion publica (consumidor) |
@@ -179,12 +179,12 @@ Esta seccion describe como preparar el entorno para desarrollar sobre los micros
 ### 8.1 Requisitos previos generales
 
 - Git.
-- JDK 17 (requerido por Spring Boot 3.x en todos los microservicios).
+- JDK 21 (requerido por Spring Boot 4.x en todos los microservicios).
 - Apache Maven (o el wrapper `mvnw` incluido en cada microservicio).
-- Node.js 18 LTS o superior y npm.
+- Node.js 20 LTS o superior y npm.
 - Angular CLI (`npm install -g @angular/cli`).
 - Docker Desktop (para levantar RabbitMQ, Kafka y bases de datos locales).
-- Cliente de Oracle Database (driver JDBC) para los microservicios que persisten en Oracle: `ms-digitalfix-workorders`, `ms-digitalfix-catalog`, `ms-digitalfix-report`, `ms-digitalfix-audit`.
+- Cliente de Oracle Database (driver JDBC) para los microservicios que persisten en Oracle: `ms-digitalfix-login`, `ms-digitalfix-workorders`, `ms-digitalfix-catalog`, `ms-digitalfix-report`, `ms-digitalfix-audit`.
 - Cuenta de GitHub con acceso de colaborador a los ocho repositorios del proyecto.
 
 ### 8.2 Organizacion local de los repositorios
