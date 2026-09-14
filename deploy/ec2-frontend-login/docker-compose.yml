@@ -1,0 +1,51 @@
+# Instancia EC2 "ec2-frontend-login": frontend Angular (SSR) + digitalfix-ms-login.
+#
+# Este archivo asume que en el HOME de la instancia se clonaron los repos con
+# la misma estructura plana que recomienda el README de digitalfix-infrastructure
+# (seccion 8.2), y que este docker-compose.yml se copio un nivel arriba de esos
+# clones, es decir:
+#
+#   ~/digitalfix/
+#     docker-compose.yml          <- este archivo
+#     digitalfix-frontend/
+#       frontend/                 <- contiene el Dockerfile del frontend
+#     digitalfix-ms-login/        <- contiene el Dockerfile de ms-login
+#
+# Build desde codigo fuente: ambos Dockerfile ya hacen build multi-stage
+# (Maven / npm) dentro del contenedor, no hace falta compilar nada a mano
+# antes de "docker compose up -d --build".
+
+services:
+  frontend:
+    build:
+      context: ./digitalfix-frontend/frontend
+      dockerfile: Dockerfile
+    image: digitalfix-frontend:latest
+    container_name: digitalfix-frontend
+    ports:
+      # Host 4200 para que coincida con el Redirect URI que se registre en
+      # Azure AD para esta EC2 (ver DEPLOY.md). El contenedor escucha en 4000.
+      - "4200:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+    restart: unless-stopped
+
+  ms-login:
+    build:
+      context: ./digitalfix-ms-login
+      dockerfile: Dockerfile
+    image: digitalfix-ms-login:latest
+    container_name: digitalfix-ms-login
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=${DB_URL}
+      - SPRING_DATASOURCE_USERNAME=${DB_USER}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      # IP/DNS publica de esta misma EC2 en el puerto 4200 (origen real del
+      # frontend una vez desplegado), no localhost.
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+    restart: unless-stopped

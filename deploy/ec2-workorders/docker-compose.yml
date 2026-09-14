@@ -1,0 +1,34 @@
+# Instancia EC2 "ec2-workorders": digitalfix-ms-workorders.
+#
+# Layout esperado en el HOME de la instancia (mismo criterio que
+# ec2-frontend-login, ver ese docker-compose.yml):
+#
+#   ~/digitalfix/
+#     docker-compose.yml          <- este archivo
+#     digitalfix-ms-workorders/   <- contiene el Dockerfile
+#
+# IMPORTANTE (seguridad): digitalfix-ms-workorders todavia NO valida el JWT de
+# Azure AD (esa validacion la hara ms-digitalfix-bff cuando exista, ver su
+# application.yaml). El Security Group de esta instancia NO debe abrir el
+# puerto 8081 a 0.0.0.0/0: restringelo al Security Group o a la IP publica de
+# "ec2-frontend-login" (unico consumidor legitimo por ahora).
+
+services:
+  ms-workorders:
+    build:
+      context: ./digitalfix-ms-workorders
+      dockerfile: Dockerfile
+    image: digitalfix-ms-workorders:latest
+    container_name: digitalfix-ms-workorders
+    ports:
+      # El contenedor siempre escucha en 8080 (ver su Dockerfile); se mapea a
+      # 8081 en el host solo por convencion (coincide con el docker-compose.yaml
+      # del propio repo y con workOrdersApiUrl en el frontend).
+      - "8081:8080"
+    environment:
+      # Mismo Oracle que ms-login (ver comentario en su application.yaml).
+      - SPRING_DATASOURCE_URL=${DB_URL}
+      - SPRING_DATASOURCE_USERNAME=${DB_USER}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+    restart: unless-stopped
