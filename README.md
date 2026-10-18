@@ -259,15 +259,35 @@ Cada microservicio define su propio `application.yml` o `application.properties`
 
 Ninguna de estas variables ni sus valores reales deben quedar hardcodeados en el codigo fuente ni subirse a los repositorios; el detalle exacto de cada una se documenta en el `README.md` propio de cada microservicio.
 
-### 8.6 Ejecucion local coordinada
+### 8.6 Puertos de los microservicios
+
+Cada microservicio tiene un puerto unico en desarrollo local, para poder levantarlos todos a la vez sin conflictos. El puerto se fija con la variable `PORT` o `SERVER_PORT` del `.env` de cada repositorio. El `8080` no se asigna a ningun servicio en local porque suele estar ocupado por Apache/XAMPP.
+
+| Componente | Puerto local | Variable | Notas |
+|---|---|---|---|
+| digitalfix-frontend | `4200` | - | `ng serve`. En Docker el contenedor escucha en `4000`. |
+| digitalfix-ms-login | `8081` | `PORT` | Destino de `apiBaseUrl` en el `environment.ts` del frontend. |
+| digitalfix-ms-user | `8082` | `PORT` | |
+| digitalfix-ms-notify | `8083` | `PORT` | |
+| digitalfix-ms-catalog | `8084` | `SERVER_PORT` | Docker Compose publica `8084` -> `8080` del contenedor. |
+| digitalfix-ms-workorders | `8085` | `SERVER_PORT` / `APP_PORT` | Docker Compose publica `8085` -> `8080` del contenedor. |
+| digitalfix-ms-report | `8086` | - | Reservado (sin implementacion aun). |
+| digitalfix-ms-audit | `8087` | - | Reservado (sin implementacion aun). |
+| RabbitMQ | `5672` / `15672` | `RABBITMQ_PORT` | AMQP / consola de gestion (`mq/docker-compose.yml`). |
+
+Al agregar un microservicio nuevo, tomar el siguiente puerto libre de esta tabla y actualizarla en el mismo Pull Request.
+
+En AWS cada servicio corre en su propia EC2, por lo que los puertos de despliegue no necesitan ser unicos y pueden diferir de los locales: `ms-login` se publica en `8080` ([`deploy/ec2-frontend-login`](deploy/ec2-frontend-login/docker-compose.yml)) y `ms-workorders` en `8081` ([`deploy/ec2-workorders`](deploy/ec2-workorders/docker-compose.yml)).
+
+### 8.7 Ejecucion local coordinada
 
 Orden recomendado para levantar un entorno de desarrollo completo:
 
 1. Levantar la infraestructura compartida necesaria (`mq/`, y cuando corresponda `kafka/`) desde este repositorio.
-2. Levantar los microservicios de dominio desde IntelliJ IDEA o linea de comandos (`mvnw spring-boot:run`), en el orden que sus dependencias requieran (por ejemplo, servicios consumidores de eventos despues de que la infraestructura de mensajeria este disponible).
+2. Levantar los microservicios de dominio desde IntelliJ IDEA o linea de comandos (`mvnw spring-boot:run`), en el orden que sus dependencias requieran (por ejemplo, servicios consumidores de eventos despues de que la infraestructura de mensajeria este disponible). Cada uno queda en el puerto indicado en la seccion 8.6.
 3. Levantar el frontend con `ng serve` desde Visual Studio Code, apuntando su configuracion al API Gateway/BFF del entorno de desarrollo.
 
-### 8.7 Control de versiones por repositorio
+### 8.8 Control de versiones por repositorio
 
 - Cada repositorio se sube con su propio `.gitignore` correspondiente a su tecnologia: Maven/Spring Boot en los microservicios, Node/Angular en el frontend. Solo debe versionarse codigo fuente y archivos de configuracion, nunca artefactos de build (`target/`, `dist/`, `node_modules/`) ni carpetas de IDE (`.idea/`, `.vscode/`).
 - La rama `main` de cada repositorio esta protegida: no se permite push directo, unicamente integracion via Pull Request aprobado.

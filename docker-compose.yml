@@ -1,0 +1,170 @@
+# ==============================================================================
+# DIGITALFIX - DOCKER COMPOSE CENTRALIZADO (DESARROLLO LOCAL)
+# ==============================================================================
+# Orquesta la plataforma completa de DigitalFix desde una sola ubicación:
+#   - 1 Frontend Angular SSR
+#   - 5 Microservicios Spring Boot (Login, User, Workorders, Catalog, Notify)
+#   - 1 Broker de Mensajería RabbitMQ
+#
+# Uso:
+#   cd digitalfix-infrastructure
+#   docker compose up -d --build
+# ==============================================================================
+
+networks:
+  digitalfix-net:
+    name: digitalfix-net
+    driver: bridge
+
+services:
+
+  # ----------------------------------------------------------------------------
+  # 1. Broker de Mensajería: RabbitMQ con Consola Web
+  # ----------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: digitalfix-rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Dashboard Web (http://localhost:15672)
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin123}
+    networks:
+      - digitalfix-net
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 2. Microservicio de Autenticación y Autorización (digitalfix-ms-login)
+  # ----------------------------------------------------------------------------
+  ms-login:
+    build:
+      context: ../digitalfix-ms-login
+      dockerfile: Dockerfile
+    container_name: ms-login-service
+    ports:
+      - "${LOGIN_PORT:-8081}:8081"
+    env_file:
+      - ../digitalfix-ms-login/.env
+    environment:
+      - PORT=8081
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+    volumes:
+      - ../digitalfix-ms-login/wallet:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 3. Microservicio de Usuarios y Clientes (digitalfix-ms-user)
+  # ----------------------------------------------------------------------------
+  ms-user:
+    build:
+      context: ../digitalfix-ms-user
+      dockerfile: Dockerfile
+    container_name: ms-user-service
+    ports:
+      - "${USER_PORT:-8082}:8082"
+    env_file:
+      - ../digitalfix-ms-user/.env
+    environment:
+      - PORT=8082
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+    volumes:
+      - ../digitalfix-ms-user/wallet:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 4. Microservicio de Órdenes de Trabajo (digitalfix-ms-workorders)
+  # ----------------------------------------------------------------------------
+  ms-workorders:
+    build:
+      context: ../digitalfix-ms-workorders
+      dockerfile: Dockerfile
+    container_name: ms-workorders-service
+    ports:
+      - "${WORKORDERS_PORT:-8085}:8080"
+    env_file:
+      - ../digitalfix-ms-workorders/.env
+    environment:
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+    volumes:
+      - ../digitalfix-ms-workorders/wallet:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 5. Microservicio de Catálogo de Servicios y Repuestos (digitalfix-ms-catalog)
+  # ----------------------------------------------------------------------------
+  ms-catalog:
+    build:
+      context: ../digitalfix-ms-catalog
+      dockerfile: Dockerfile
+    container_name: ms-catalog-service
+    ports:
+      - "${CATALOG_PORT:-8084}:8080"
+    env_file:
+      - ../digitalfix-ms-catalog/.env
+    environment:
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+    volumes:
+      - ../digitalfix-ms-catalog/wallet:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 6. Microservicio de Notificaciones y Despacho (digitalfix-ms-notify)
+  # ----------------------------------------------------------------------------
+  ms-notify:
+    build:
+      context: ../digitalfix-ms-notify/ms.notify
+      dockerfile: Dockerfile
+    container_name: ms-digitalfix-notify
+    ports:
+      - "${NOTIFY_PORT:-8083}:8083"
+    env_file:
+      - ../digitalfix-ms-notify/.env
+    environment:
+      - PORT=8083
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+    volumes:
+      - ../digitalfix-ms-notify/wallet:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 7. Frontend Web SPA / SSR (digitalfix-frontend)
+  # ----------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ../digitalfix-frontend/frontend
+      dockerfile: Dockerfile
+    container_name: digitalfix-frontend
+    ports:
+      - "4200:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
