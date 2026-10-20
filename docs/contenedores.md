@@ -14,8 +14,8 @@ Este documento contiene la información técnica, especializada y concisa para d
 | **MS Notify** | `ms-digitalfix-notify` | `8083` | `8083` | [http://localhost:8083/swagger-ui.html](http://localhost:8083/swagger-ui.html) | Java 21 / Spring AMQP / Mail |
 | **MS Catalog** | `ms-catalog-service` | `8084` | `8080` | [http://localhost:8084/swagger-ui.html](http://localhost:8084/swagger-ui.html) | Java 21 / Spring Boot 4 / Oracle JPA |
 | **MS Workorders** | `ms-workorders-service` | `8085` | `8080` | [http://localhost:8085/swagger-ui.html](http://localhost:8085/swagger-ui.html) | Java 21 / Spring Boot 4 / Oracle JPA |
-| **RabbitMQ Broker** | `digitalfix-rabbitmq` | `5672` | `5672` | `amqp://localhost:5672` | RabbitMQ 3.12 Alpine |
-| **RabbitMQ Web** | `digitalfix-rabbitmq` | `15672` | `15672` | [http://localhost:15672](http://localhost:15672) (`admin` / `admin123`) | Consola de Gestión AMQP |
+| **RabbitMQ Broker** | `digitalfix-rabbitmq-node1` / `-node2` | `5672` | `5672` | `amqp://localhost:5672` | RabbitMQ 3.12 Alpine |
+| **RabbitMQ Web** | `digitalfix-rabbitmq-node1` | `15672` | `15672` | [http://localhost:15672](http://localhost:15672) (`admin` / `admin123`) | Consola de Gestión AMQP |
 
 ---
 

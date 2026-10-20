@@ -125,9 +125,12 @@ Roles en la mensajeria:
 | Consumidor | `ms-notify` | Declara la topologia (`RabbitMQConfig`). Tiene un `@RabbitListener` por dominio, con ACK manual. Ante un error definitivo hace NACK y el mensaje va a la DLQ; ante un error transitorio reintenta hasta 3 veces (`x-retry-count`) y despues lo envia a la DLQ. |
 | Administrador | `ms-admin-queues` | API REST para colas, exchanges y bindings, con control de listeners. Protege `q.cmd.*` y `cmd.*` contra el borrado. Se usa desde el panel **Mensajeria** del frontend (SUPERADMIN). |
 
-En la plataforma centralizada el broker es el servicio `rabbitmq` del `docker-compose.yml` raiz:
+En la plataforma centralizada el broker es un clúster de 2 nodos del `docker-compose.yml` raiz: `rabbitmq` (`rabbit@rabbitmq-node1`, al que conectan los microservicios) y `rabbitmq-node2` (`rabbit@rabbitmq-node2`):
+- Clúster: peer discovery `classic_config` (`mq/rabbitmq-cluster.conf`) y Erlang cookie compartida (`RABBITMQ_ERLANG_COOKIE`). Verificación: `docker exec digitalfix-rabbitmq-node1 rabbitmqctl cluster_status`.
+- Colas quorum: las 6 colas de ms-notify se replican en ambos nodos. Con 2 nodos, si cae uno las colas se detienen hasta que vuelva (la mayoría es 2/2), pero no se pierden mensajes.
+- Failover del cliente: ms-notify, ms-workorders y ms-admin-queues conectan con `RABBITMQ_ADDRESSES=rabbitmq-node1:5672,rabbitmq-node2:5672` y se reconectan al otro nodo si cae el suyo.
 - AMQP 5672: solo dentro de `digitalfix-net`.
-- Consola de administracion: publicada solo en `127.0.0.1:15672`. En la nube se abre por tunel SSH (`ssh -L 15672:localhost:15672 usuario@servidor`).
+- Consola de administracion: publicada solo en `127.0.0.1:15672` (node1) y `127.0.0.1:15673` (node2). En la nube se abre por tunel SSH (`ssh -L 15672:localhost:15672 usuario@servidor`).
 - Credenciales: `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` del `.env`.
 
 ## 6. Streaming y auditoria (Apache Kafka)
@@ -181,7 +184,8 @@ Contenedores que se levantan (red `digitalfix-net`):
 |---|---|---|---|
 | `digitalfix-frontend` | `4200` | 4000 | Angular SSR |
 | `digitalfix-bff-gateway` | `8090` | 8090 | Unica entrada al backend |
-| `digitalfix-rabbitmq` | `127.0.0.1:15672` (consola) | 5672 / 15672 | Broker |
+| `digitalfix-rabbitmq-node1` | `127.0.0.1:15672` (consola) | 5672 / 15672 | Broker, nodo 1 del clúster |
+| `digitalfix-rabbitmq-node2` | `127.0.0.1:15673` (consola) | 5672 / 15672 | Broker, nodo 2 del clúster |
 | `ms-login-service` | — | 8081 | Sesion y auditoria de accesos |
 | `ms-user-service` | — | 8082 | Usuarios y roles |
 | `ms-digitalfix-notify` | — | 8083 | Consumidor de colas |

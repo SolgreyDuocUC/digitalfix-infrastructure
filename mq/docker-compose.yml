@@ -1,4 +1,15 @@
-version: '3.8'
+# ==============================================================================
+# DIGITALFIX - CLÚSTER RABBITMQ AISLADO (SOLO BROKER, 2 NODOS)
+# ==============================================================================
+# Levanta únicamente el clúster de mensajería, sin microservicios. Útil para
+# probar o demostrar el clúster por separado. No usar a la vez que el
+# docker-compose.yml raíz (ambos crean los mismos nodos).
+#
+# Uso:
+#   cd digitalfix-infrastructure/mq
+#   docker compose --env-file ../.env up -d
+#   docker exec digitalfix-rabbitmq-node1 rabbitmqctl cluster_status
+# ==============================================================================
 
 networks:
   digitalfix-net:
@@ -7,26 +18,44 @@ networks:
 
 services:
   rabbitmq-node1:
-    image: rabbitmq:3.12-management
-    container_name: rabbitmq-node1
+    image: rabbitmq:3.12-management-alpine
+    container_name: digitalfix-rabbitmq-node1
     hostname: rabbitmq-node1
     environment:
-      RABBITMQ_ERLANG_COOKIE: 'DIGITALFIX_SECRET_COOKIE_123'
-      RABBITMQ_DEFAULT_USER: 'digitalfix'
-      RABBITMQ_DEFAULT_PASS: 'digitalfix_pass'
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin123}
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-digitalfix-cluster-cookie}
     ports:
-      - "5672:5672"   # Puerto AMQP para los microservicios
-      - "15672:15672" # Puerto de la interfaz web de gestión
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"   # Consola web
+    volumes:
+      - ./rabbitmq-cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
     networks:
       - digitalfix-net
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   rabbitmq-node2:
-    image: rabbitmq:3.12-management
-    container_name: rabbitmq-node2
+    image: rabbitmq:3.12-management-alpine
+    container_name: digitalfix-rabbitmq-node2
     hostname: rabbitmq-node2
     environment:
-      RABBITMQ_ERLANG_COOKIE: 'DIGITALFIX_SECRET_COOKIE_123'
-    depends_on:
-      - rabbitmq-node1
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-digitalfix-cluster-cookie}
+    ports:
+      - "127.0.0.1:${RABBITMQ_NODE2_MANAGEMENT_PORT:-15673}:15672"   # Consola web del nodo 2
+    volumes:
+      - ./rabbitmq-cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
     networks:
       - digitalfix-net
+    depends_on:
+      rabbitmq-node1:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped

@@ -5,7 +5,7 @@
 #   - 1 Frontend Angular SSR
 #   - 6 Microservicios Spring Boot (Login, User, Workorders, Catalog, Notify, Admin Queues)
 #   - 1 BFF / API Gateway (valida el JWT y enruta a los microservicios)
-#   - 1 Broker de Mensajería RabbitMQ
+#   - 1 Clúster RabbitMQ de 2 nodos (rabbitmq-node1 + rabbitmq-node2)
 #
 # Uso rápido:
 #   cd digitalfix-infrastructure
@@ -25,11 +25,20 @@ networks:
 services:
 
   # ----------------------------------------------------------------------------
-  # 1. Broker de Mensajería: RabbitMQ con Consola Web
+  # 1. Broker de Mensajería: Clúster RabbitMQ de 2 nodos con Consola Web
   # ----------------------------------------------------------------------------
+  # El clúster se forma con peer discovery "classic_config"
+  # (mq/rabbitmq-cluster.conf): ambos nodos comparten la Erlang cookie y se
+  # encuentran por su hostname (rabbit@rabbitmq-node1 / rabbit@rabbitmq-node2).
+  # Usuarios, vhosts, exchanges y colas son comunes a todo el clúster.
+  # Verificación: docker exec digitalfix-rabbitmq-node1 rabbitmqctl cluster_status
+
+  # Nodo 1 (semilla). El servicio se sigue llamando "rabbitmq" para que los
+  # microservicios conecten con RABBITMQ_HOST=rabbitmq sin cambios.
   rabbitmq:
     image: rabbitmq:3.12-management-alpine
-    container_name: digitalfix-rabbitmq
+    container_name: digitalfix-rabbitmq-node1
+    hostname: rabbitmq-node1
     # AMQP (5672) solo dentro de digitalfix-net: ms-notify se conecta por el
     # nombre "rabbitmq". La consola web (15672) se publica solo en 127.0.0.1:
     # se abre en http://localhost:15672 desde la misma máquina y, en la nube,
@@ -42,8 +51,38 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-admin}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin123}
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-digitalfix-cluster-cookie}
+    volumes:
+      - ./mq/rabbitmq-cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
+    networks:
+      digitalfix-net:
+        aliases:
+          - rabbitmq-node1   # nombre que usa node2 para encontrarlo
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Nodo 2: arranca cuando node1 está sano y se une a su clúster.
+  rabbitmq-node2:
+    image: rabbitmq:3.12-management-alpine
+    container_name: digitalfix-rabbitmq-node2
+    hostname: rabbitmq-node2
+    expose:
+      - "5672"    # AMQP
+    ports:
+      - "127.0.0.1:${RABBITMQ_NODE2_MANAGEMENT_PORT:-15673}:15672"   # Consola web del nodo 2
+    environment:
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-digitalfix-cluster-cookie}
+    volumes:
+      - ./mq/rabbitmq-cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
     networks:
       - digitalfix-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
     healthcheck:
       test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
       interval: 10s
@@ -130,6 +169,7 @@ services:
       # Productor de eventos: publica en cmd.direct (email.send, dispatch.ticket, report.gen)
       - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
       - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     volumes:
       - ../digitalfix-ms-workorders/wallet:/app/wallet:ro
@@ -137,6 +177,8 @@ services:
       - digitalfix-net
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      rabbitmq-node2:
         condition: service_healthy
     restart: unless-stopped
 
@@ -189,6 +231,7 @@ services:
       - SERVER_PORT=8083
       - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
       - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     volumes:
@@ -197,6 +240,8 @@ services:
       - digitalfix-net
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      rabbitmq-node2:
         condition: service_healthy
     restart: unless-stopped
 
@@ -222,6 +267,7 @@ services:
       - PORT=8084
       - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
       - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
       - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-admin}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin123}
       - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
@@ -231,6 +277,8 @@ services:
       - digitalfix-net
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      rabbitmq-node2:
         condition: service_healthy
       ms-notify:
         condition: service_started
