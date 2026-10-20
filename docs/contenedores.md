@@ -64,9 +64,9 @@ docker network create digitalfix-net
 
 ### Comandos por Microservicio:
 
-* **Frontend Web (`digitalfix-frontend/frontend`)**:
+* **Frontend Web (`digitalfix-frontend`)**:
   ```powershell
-  cd digitalfix-frontend/frontend
+  cd digitalfix-frontend
   docker compose up -d --build
   ```
 
@@ -104,12 +104,20 @@ docker network create digitalfix-net
 
 ## 3. Requisitos y Configuración de Entorno
 
-1. **Archivos `.env`**:
-   Cada microservicio debe contar con su archivo `.env` configurado en su respectiva raíz (basado en su `.env.example`).
-2. **Oracle Wallet mTLS**:
-   Los microservicios que conectan a Oracle Autonomous Database (`login`, `user`, `workorders`, `catalog`, `notify`) requieren tener la carpeta `wallet/` en la raíz de su proyecto con los certificados (`cwallet.sso`, `tnsnames.ora`, etc.). El Docker Compose monta este directorio en modo solo lectura (`/app/wallet:ro`).
-3. **Azure AD / Microsoft Entra ID**:
-   El frontend expone el puerto `4200` hacia el host para ser compatible con la URL de redirección configurada en Azure AD (`http://localhost:4200`).
+1. **Archivo `.env` Centralizado (Recomendado para revisión general y despliegue del profesor)**:
+   - En la raíz de `digitalfix-infrastructure` se encuentra el archivo `.env` (creado a partir de `.env.example`).
+   - Este archivo centraliza la configuración completa de la plataforma: credenciales de Oracle Autonomous Database, Azure AD / Microsoft Entra ID, puertos, orígenes CORS y comunicación interna entre contenedores (`MS_USER_URL=http://ms-user-service:8082`, `RABBITMQ_HOST=rabbitmq`).
+   - Al ejecutar `docker compose up -d --build` desde `digitalfix-infrastructure`, todos los servicios toman automáticamente estos parámetros sin necesidad de configurar cada microservicio individualmente.
+
+2. **Compatibilidad con `.env` Individuales en cada Repositorio**:
+   - Cada repositorio mantiene su propio archivo `.env` intacto para el desarrollo aislado.
+   - En `docker-compose.yml`, los archivos `.env` individuales se configuran con `required: false`. Esto significa que si el profesor solo descarga los repositorios y no crea los `.env` individuales, el sistema levantará perfectamente usando el `.env` centralizado. Si un desarrollador cuenta con variables en su `.env` local, estas se cargarán en conjunto de forma transparente.
+
+3. **Oracle Wallet mTLS**:
+   - Los microservicios que conectan a Oracle Autonomous Database (`login`, `user`, `workorders`, `catalog`, `notify`) requieren tener la carpeta `wallet/` en la raíz de su respectivo repositorio con los certificados (`cwallet.sso`, `tnsnames.ora`, etc.). El Docker Compose monta este directorio en modo solo lectura (`/app/wallet:ro`).
+
+4. **Azure AD / Microsoft Entra ID**:
+   - El frontend expone el puerto `4200` hacia el host para ser compatible con la URL de redirección configurada en Azure AD (`http://localhost:4200`).
 
 ---
 

@@ -28,10 +28,17 @@ El acceso a la plataforma se realiza mediante login corporativo con Azure AD (ID
 El flujo de toda peticion autenticada hacia el backend es siempre el mismo:
 
 ```
-Cliente (Angular + MSAL) -> JWT -> AWS API Gateway -> ms-digitalfix-bff -> microservicio de dominio
+Cliente (Angular + MSAL) -> JWT -> [AWS API Gateway] -> digitalfix-bff-gateway -> microservicio de dominio
+                                                                                   |
+                                     ms-workorders --(eventos)--> RabbitMQ --> ms-notify
+                                                                     ^
+                                                ms-admin-queues -----+ (administra la topologia)
 ```
 
-El API Gateway valida el JWT emitido por Azure AD (issuer y audience) antes de reenviar la peticion. El BFF y cada microservicio de dominio revalidan el token y aplican autorizacion por rol sobre sus propios endpoints.
+- **BFF (`digitalfix-bff-gateway`, puerto 8090):** unica puerta de entrada del frontend. Valida la firma, el issuer, el audience y la vigencia del JWT de Entra ID, exige el scope `access_as_user`, aplica la autorizacion por rol y enruta por la red interna `digitalfix-net`.
+- **Microservicios de dominio:** vuelven a validar el token y aplican sus propias reglas por rol (defensa en profundidad).
+- **AWS API Gateway (JWT Authorizer):** queda delante del BFF en el despliegue en AWS.
+- **Roles de negocio:** viven en la base de datos (ms-user), no en Entra ID. El BFF y los microservicios los consultan con `GET /api/user/me`.
 
 ## 2. Organizacion del ecosistema polirepo
 
@@ -43,9 +50,11 @@ El sistema se desarrolla bajo una estrategia multi-repo: un repositorio por cada
 |---|---|---|---|---|
 | [digitalfix-frontend](https://github.com/Blacknight3648/digitalfix-frontend.git) | Blacknight3648 | Angular + MSAL | Interfaz de usuario, login corporativo, consumo del API Gateway. | Publica (SPA) |
 | [digitalfix-ms-login](https://github.com/Blacknight3648/digitalfix-ms-login.git) | Blacknight3648 | Spring Boot + Oracle | Autenticacion/sesion de aplicacion e integracion con el flujo de identidad; auditoria de intentos de login. | `/api/v1/login/*`, `/api/v1/audit/*` |
-| [digitalfix-ms-user](https://github.com/Blacknight3648/digitalfix-ms-user.git) | Blacknight3648 | Spring Boot | Gestion de usuarios y roles de dominio. | `/api/users/*` |
-| [digitalfix-ms-workorders](https://github.com/Blacknight3648/digitalfix-ms-workorders.git) | Blacknight3648 | Spring Boot + Oracle | CRUD de ordenes de trabajo y maquina de estados. | `/api/workorders/*` |
-| [digitalfix-ms-notify](https://github.com/Blacknight3648/digitalfix-ms-notify.git) | Blacknight3648 | Spring Boot + RabbitMQ | Consumidor de colas; envio de notificaciones y tickets de despacho. | Sin exposicion publica (consumidor) |
+| [digitalfix-bff-gateway](https://github.com/SolgreyDuocUC/digitalfix-bff-gateway.git) | SolgreyDuocUC | Spring Boot + Spring Security | BFF / gateway: valida el JWT y el rol, y enruta a los microservicios. | Publica: `:8090/api/**` |
+| [digitalfix-ms-user](https://github.com/Blacknight3648/digitalfix-ms-user.git) | Blacknight3648 | Spring Boot + Oracle | Usuarios, roles, empresas y areas; aprovisionamiento en el primer login. | `/api/user/*` |
+| [digitalfix-ms-workorders](https://github.com/Blacknight3648/digitalfix-ms-workorders.git) | Blacknight3648 | Spring Boot + Oracle + RabbitMQ | Ordenes de trabajo y de servicio, clientes, proveedores, cuadrillas, catalogo de servicios, regiones y comunas. **Productor** de eventos. | `/api/ordenes-trabajo/*`, `/api/clientes/*`, `/api/servicios/*`, ... |
+| [digitalfix-ms-notify](https://github.com/Blacknight3648/digitalfix-ms-notify.git) | Blacknight3648 | Spring Boot + RabbitMQ | **Consumidor** de colas: correos, tickets de despacho e informes; DLQ. | Interna: `/api/v1/listeners` |
+| [digitalfix-ms-admin-queues](https://github.com/Blacknight3648/digitalfix-ms-admin-queues.git) | Blacknight3648 | Spring Boot + Spring AMQP | **Administrador** de RabbitMQ: colas, exchanges, bindings y listeners. | `/api/v1/queues`, `/exchanges`, `/bindings`, `/listeners` (via BFF, SUPERADMIN) |
 | [digitalfix-ms-catalog](https://github.com/SolgreyDuocUC/digitalfix-ms-catalog.git) | SolgreyDuocUC | Spring Boot + Oracle | CRUD de servicios tecnicos, tarifas y stock de repuestos. | `/api/catalog/*` |
 | [digitalfix-ms-report](https://github.com/SolgreyDuocUC/digitalfix-ms-report.git) | SolgreyDuocUC | Spring Boot + Kafka + Oracle | Consumidor de eventos; agregaciones y KPIs de lectura. | `/api/report/*` (solo lectura) |
 | [digitalfix-ms-audit](https://github.com/SolgreyDuocUC/digitalfix-ms-audit.git) | SolgreyDuocUC | Spring Boot + Kafka + Oracle | Consumidor de eventos; persistencia y consulta del timeline. | `/api/audit/*` (solo lectura) |
@@ -54,11 +63,12 @@ Cada repositorio mantiene su propio ciclo de vida (build, test, deploy), su prop
 
 ### 2.1 Componentes pendientes
 
-Segun la pauta del caso semestral, en etapas posteriores del curso se deben incorporar ademas:
+Ya incorporados: el BFF (`digitalfix-bff-gateway`) y el administrador de RabbitMQ (`digitalfix-ms-admin-queues`).
 
-- `ms-digitalfix-bff`: Backend for Frontend (Spring Boot + Spring Security), unico punto de entrada detras del API Gateway hacia los microservicios de dominio.
-- Un microservicio o modulo administrador de RabbitMQ.
-- Un microservicio o modulo administrador de Kafka.
+Pendientes segun la pauta del caso semestral:
+
+- AWS API Gateway con JWT Authorizer delante del BFF (despliegue en AWS).
+- Un microservicio o modulo administrador de Kafka (junto con ms-report y ms-audit).
 
 Estos componentes se agregaran como repositorios adicionales (o como modulos dentro de uno existente, segun defina el equipo) conforme lo exija cada evaluacion. Cuando se incorporen, deben agregarse a la tabla anterior y al tablero Kanban unico del proyecto.
 
@@ -78,7 +88,8 @@ Cada carpeta contiene su propio `docker-compose.yml` para permitir el despliegue
 - App Registration "DigitalFix" en Azure AD: `clientId`, `redirectUri`, `authority = https://login.microsoftonline.com/<TENANT_ID>/`.
 - Frontend (MSAL Angular): protege rutas mediante guards y adjunta `Authorization: Bearer <access_token>` a cada request saliente mediante un interceptor.
 - AWS API Gateway (HTTP API) con JWT Authorizer: `issuer = https://login.microsoftonline.com/<TENANT_ID>/v2.0`, `audience = api://<API_CLIENT_ID>`.
-- Backend (Spring Security / Resource Server): valida el JWT con `security.oauth2.resourceserver.jwt.issuer-uri` y aplica autorizacion por rol (`Admin`, `Operador`, `Cliente`, `Auditor`) sobre cada endpoint.
+- BFF y microservicios (Spring Security / OAuth2 Resource Server): `JwtDecoder` con validadores explicitos de firma (JWKS del tenant), `exp`/`nbf`, issuer (v1 y v2) y audience (`clientId` o `api://clientId`). Autorizacion por rol con jerarquia: `SUPERADMIN` hereda `ADMIN`, `SUPERVISOR`, `TECNICO`, `CLIENTE` y `AUDITOR`.
+- El rol de negocio se resuelve en ms-user (`GET /api/user/me`) y se guarda en cache 5 minutos. Una falla de ms-user no se guarda en cache.
 
 Ningun servicio debe confiar en un JWT sin validar su firma, `issuer` y `audience`. La validacion de presencia del header, sin verificar estos claims, no se considera una implementacion valida.
 
@@ -104,7 +115,20 @@ Exchanges definidos:
 - `cmd.topic` (topic): enrutamiento por patrones.
 - `cmd.dead.dlx` (direct): enrutamiento de mensajes rechazados o no entregables hacia sus DLQ correspondientes.
 
-Buenas practicas exigidas a los consumidores: envelope comun (`type`, `eventId`, `timestamp`, `traceId`, `correlationId`), ACK/NACK explicitos, idempotencia en el procesamiento y metricas de tasa de DLQ.
+Buenas practicas exigidas a los consumidores: envelope comun (`eventType`, `eventId`, `timestamp`, `traceId`, `data`), ACK/NACK explicitos, idempotencia en el procesamiento y metricas de tasa de DLQ.
+
+Roles en la mensajeria:
+
+| Rol | Componente | Detalle |
+|---|---|---|
+| Productor | `ms-workorders` | Publica en `cmd.direct` despues del commit de la transaccion: OT creada o cambio de estado (`email.send`), cuadrilla asignada (`dispatch.ticket`), OT cerrada (`report.gen`). |
+| Consumidor | `ms-notify` | Declara la topologia (`RabbitMQConfig`). Tiene un `@RabbitListener` por dominio, con ACK manual. Ante un error definitivo hace NACK y el mensaje va a la DLQ; ante un error transitorio reintenta hasta 3 veces (`x-retry-count`) y despues lo envia a la DLQ. |
+| Administrador | `ms-admin-queues` | API REST para colas, exchanges y bindings, con control de listeners. Protege `q.cmd.*` y `cmd.*` contra el borrado. Se usa desde el panel **Mensajeria** del frontend (SUPERADMIN). |
+
+En la plataforma centralizada el broker es el servicio `rabbitmq` del `docker-compose.yml` raiz:
+- AMQP 5672: solo dentro de `digitalfix-net`.
+- Consola de administracion: publicada solo en `127.0.0.1:15672`. En la nube se abre por tunel SSH (`ssh -L 15672:localhost:15672 usuario@servidor`).
+- Credenciales: `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` del `.env`.
 
 ## 6. Streaming y auditoria (Apache Kafka)
 
@@ -126,9 +150,48 @@ Plataforma de streaming de eventos de negocio orientada a la analitica en tiempo
 - Docker Compose v2 o superior.
 - Red local o puente Docker con soporte para nombres de contenedor.
 
-### Red compartida
+### Despliegue Centralizado Completo (Toda la Plataforma)
 
-Los modulos utilizan la red puente `digitalfix-net`. Docker Compose crea la red automaticamente al inicializar el primer servicio si aun no existe. Todo nuevo contenedor agregado a este repositorio debe asociarse explicitamente a esta red.
+Para levantar todos los microservicios, el broker RabbitMQ y el frontend con un solo comando (ideal para revisión docente y evaluación):
+
+1. **Variables de entorno centralizadas**:
+   - En la raíz de `digitalfix-infrastructure/` se dispone de un archivo `.env` configurado (y la plantilla `.env.example`).
+   - Centraliza la conexión Oracle Autonomous, credenciales de Azure AD, puertos locales y nombres de red internos Docker.
+   - Si no existe el archivo `.env`, créalo copiando `.env.example`:
+     ```bash
+     cp .env.example .env    # Linux / macOS
+     copy .env.example .env  # Windows CMD / PowerShell
+     ```
+
+2. **Levantar toda la plataforma**:
+   ```bash
+   cd digitalfix-infrastructure
+   docker compose up -d --build
+   ```
+
+3. **Verificación y logs**:
+   ```bash
+   docker compose ps
+   docker compose logs -f
+   ```
+
+Contenedores que se levantan (red `digitalfix-net`):
+
+| Contenedor | Puerto en el host | Puerto interno | Rol |
+|---|---|---|---|
+| `digitalfix-frontend` | `4200` | 4000 | Angular SSR |
+| `digitalfix-bff-gateway` | `8090` | 8090 | Unica entrada al backend |
+| `digitalfix-rabbitmq` | `127.0.0.1:15672` (consola) | 5672 / 15672 | Broker |
+| `ms-login-service` | — | 8081 | Sesion y auditoria de accesos |
+| `ms-user-service` | — | 8082 | Usuarios y roles |
+| `ms-digitalfix-notify` | — | 8083 | Consumidor de colas |
+| `ms-admin-queues` | — | 8084 | Administrador de RabbitMQ |
+| `ms-workorders-service` | — | 8080 | Ordenes de trabajo (productor) |
+| `ms-catalog-service` | — | 8080 | Catalogo (en desarrollo) |
+
+Los microservicios no publican puertos en el host (`expose` en vez de `ports`): solo se accede a ellos a traves del BFF.
+
+Para mas detalles sobre puertos y contenedores, consulta [docs/contenedores.md](docs/contenedores.md). La matriz de funcionalidades del proyecto esta en [docs/matrizFuncionalidades.md](docs/matrizFuncionalidades.md).
 
 ### Despliegue de RabbitMQ
 
@@ -270,6 +333,8 @@ Cada microservicio tiene un puerto unico en desarrollo local, para poder levanta
 | digitalfix-ms-user | `8082` | `PORT` | |
 | digitalfix-ms-notify | `8083` | `PORT` | |
 | digitalfix-ms-catalog | `8084` | `SERVER_PORT` | Docker Compose publica `8084` -> `8080` del contenedor. |
+| digitalfix-ms-admin-queues | `8084` | `PORT` | Mismo puerto que ms-catalog en local: no levantar ambos fuera de Docker al mismo tiempo. En Docker no se publica. |
+| digitalfix-bff-gateway | `8090` | `SERVER_PORT` | Unico backend publicado en el host. |
 | digitalfix-ms-workorders | `8085` | `SERVER_PORT` / `APP_PORT` | Docker Compose publica `8085` -> `8080` del contenedor. |
 | digitalfix-ms-report | `8086` | - | Reservado (sin implementacion aun). |
 | digitalfix-ms-audit | `8087` | - | Reservado (sin implementacion aun). |

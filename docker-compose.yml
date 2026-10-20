@@ -3,12 +3,18 @@
 # ==============================================================================
 # Orquesta la plataforma completa de DigitalFix desde una sola ubicación:
 #   - 1 Frontend Angular SSR
-#   - 5 Microservicios Spring Boot (Login, User, Workorders, Catalog, Notify)
+#   - 6 Microservicios Spring Boot (Login, User, Workorders, Catalog, Notify, Admin Queues)
+#   - 1 BFF / API Gateway (valida el JWT y enruta a los microservicios)
 #   - 1 Broker de Mensajería RabbitMQ
 #
-# Uso:
+# Uso rápido:
 #   cd digitalfix-infrastructure
 #   docker compose up -d --build
+#
+# Gestión de variables:
+#   - Carga de forma centralizada "digitalfix-infrastructure/.env".
+#   - Si existen variables locales en los repositorios individuales, se combinan
+#     sin generar errores en caso de que falten (required: false).
 # ==============================================================================
 
 networks:
@@ -24,9 +30,15 @@ services:
   rabbitmq:
     image: rabbitmq:3.12-management-alpine
     container_name: digitalfix-rabbitmq
+    # AMQP (5672) solo dentro de digitalfix-net: ms-notify se conecta por el
+    # nombre "rabbitmq". La consola web (15672) se publica solo en 127.0.0.1:
+    # se abre en http://localhost:15672 desde la misma máquina y, en la nube,
+    # por túnel SSH (ssh -L 15672:localhost:15672 usuario@servidor); nunca
+    # queda expuesta a internet aunque el security group abra el puerto.
+    expose:
+      - "5672"    # AMQP
     ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # Dashboard Web (http://localhost:15672)
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"   # Consola web de administración
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-admin}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin123}
@@ -47,14 +59,20 @@ services:
       context: ../digitalfix-ms-login
       dockerfile: Dockerfile
     container_name: ms-login-service
-    ports:
-      - "${LOGIN_PORT:-8081}:8081"
+    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
+    expose:
+      - "8081"
     env_file:
-      - ../digitalfix-ms-login/.env
+      - path: .env
+        required: false
+      - path: ../digitalfix-ms-login/.env
+        required: false
     environment:
       - PORT=8081
+      - SERVER_PORT=8081
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     volumes:
       - ../digitalfix-ms-login/wallet:/app/wallet:ro
     networks:
@@ -69,14 +87,19 @@ services:
       context: ../digitalfix-ms-user
       dockerfile: Dockerfile
     container_name: ms-user-service
-    ports:
-      - "${USER_PORT:-8082}:8082"
+    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
+    expose:
+      - "8082"
     env_file:
-      - ../digitalfix-ms-user/.env
+      - path: .env
+        required: false
+      - path: ../digitalfix-ms-user/.env
+        required: false
     environment:
       - PORT=8082
+      - SERVER_PORT=8082
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     volumes:
       - ../digitalfix-ms-user/wallet:/app/wallet:ro
     networks:
@@ -91,17 +114,30 @@ services:
       context: ../digitalfix-ms-workorders
       dockerfile: Dockerfile
     container_name: ms-workorders-service
-    ports:
-      - "${WORKORDERS_PORT:-8085}:8080"
+    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
+    expose:
+      - "8080"
     env_file:
-      - ../digitalfix-ms-workorders/.env
+      - path: .env
+        required: false
+      - path: ../digitalfix-ms-workorders/.env
+        required: false
     environment:
+      - SERVER_PORT=8080
+      - PORT=8080
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      # Productor de eventos: publica en cmd.direct (email.send, dispatch.ticket, report.gen)
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     volumes:
       - ../digitalfix-ms-workorders/wallet:/app/wallet:ro
     networks:
       - digitalfix-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
@@ -112,13 +148,20 @@ services:
       context: ../digitalfix-ms-catalog
       dockerfile: Dockerfile
     container_name: ms-catalog-service
-    ports:
-      - "${CATALOG_PORT:-8084}:8080"
+    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
+    expose:
+      - "8080"
     env_file:
-      - ../digitalfix-ms-catalog/.env
+      - path: .env
+        required: false
+      - path: ../digitalfix-ms-catalog/.env
+        required: false
     environment:
+      - SERVER_PORT=8080
+      - PORT=8080
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     volumes:
       - ../digitalfix-ms-catalog/wallet:/app/wallet:ro
     networks:
@@ -133,16 +176,21 @@ services:
       context: ../digitalfix-ms-notify/ms.notify
       dockerfile: Dockerfile
     container_name: ms-digitalfix-notify
-    ports:
-      - "${NOTIFY_PORT:-8083}:8083"
+    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
+    expose:
+      - "8083"
     env_file:
-      - ../digitalfix-ms-notify/.env
+      - path: .env
+        required: false
+      - path: ../digitalfix-ms-notify/.env
+        required: false
     environment:
       - PORT=8083
-      - RABBITMQ_HOST=rabbitmq
-      - RABBITMQ_PORT=5672
+      - SERVER_PORT=8083
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     volumes:
       - ../digitalfix-ms-notify/wallet:/app/wallet:ro
     networks:
@@ -153,15 +201,86 @@ services:
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
-  # 7. Frontend Web SPA / SSR (digitalfix-frontend)
+  # 7. Administrador de Colas AMQP (digitalfix-ms-admin-queues)
+  # ----------------------------------------------------------------------------
+  # API REST para administrar la topología de RabbitMQ (colas, exchanges,
+  # bindings y listeners). Solo dentro de digitalfix-net: se llega a través del
+  # BFF, que exige rol SUPERADMIN.
+  ms-admin-queues:
+    build:
+      context: ../digitalfix-ms-admin-queues
+      dockerfile: Dockerfile
+    container_name: ms-admin-queues
+    expose:
+      - "8084"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../digitalfix-ms-admin-queues/.env
+        required: false
+    environment:
+      - PORT=8084
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin123}
+      - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
+      # Los @RabbitListener viven en ms-notify: el control de listeners se delega a su API interna
+      - MS_NOTIFY_URL=http://ms-digitalfix-notify:8083
+    networks:
+      - digitalfix-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      ms-notify:
+        condition: service_started
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 8. BFF / API Gateway (digitalfix-bff-gateway)
+  # ----------------------------------------------------------------------------
+  # Única puerta de entrada del frontend: valida el JWT de Entra ID (firma,
+  # issuer, audience, vigencia, scope y rol) y enruta a ms-login, ms-user,
+  # ms-workorders y ms-admin-queues por la red interna digitalfix-net.
+  bff-gateway:
+    build:
+      context: ../digitalfix-bff-gateway
+      dockerfile: Dockerfile
+    container_name: digitalfix-bff-gateway
+    ports:
+      - "${BFF_PORT:-8090}:8090"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../digitalfix-bff-gateway/.env
+        required: false
+    environment:
+      - SERVER_PORT=8090
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+      - MS_LOGIN_URL=http://ms-login-service:8081
+      - MS_USER_URL=http://ms-user-service:8082
+      - MS_WORKORDERS_URL=http://ms-workorders-service:8080
+      - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+    networks:
+      - digitalfix-net
+    depends_on:
+      - ms-login
+      - ms-user
+      - ms-workorders
+      - ms-admin-queues
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 9. Frontend Web SPA / SSR (digitalfix-frontend)
   # ----------------------------------------------------------------------------
   frontend:
     build:
-      context: ../digitalfix-frontend/frontend
+      context: ../digitalfix-frontend
       dockerfile: Dockerfile
     container_name: digitalfix-frontend
     ports:
-      - "4200:4000"
+      - "${FRONTEND_PORT:-4200}:4000"
     environment:
       - NODE_ENV=production
       - PORT=4000

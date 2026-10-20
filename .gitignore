@@ -31,3 +31,8 @@ build/
 
 ### VS Code ###
 .vscode/
+### Secretos: nunca subir el .env (sí la plantilla) ###
+.env
+*.env
+!.env.example
+
