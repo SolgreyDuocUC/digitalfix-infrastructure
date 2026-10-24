@@ -166,6 +166,8 @@ services:
       - PORT=8080
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      # Stock de repuestos: se descuenta en ms-catalog al asignar la orden
+      - MS_CATALOG_URL=http://ms-catalog-service:8080
       # Productor de eventos: publica en cmd.direct (email.send, dispatch.ticket, report.gen)
       - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
       - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
@@ -180,6 +182,8 @@ services:
         condition: service_healthy
       rabbitmq-node2:
         condition: service_healthy
+      ms-catalog:
+        condition: service_started
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
@@ -190,7 +194,7 @@ services:
       context: ../digitalfix-ms-catalog
       dockerfile: Dockerfile
     container_name: ms-catalog-service
-    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
+    # Sin "ports": solo accesible dentro de digitalfix-net (lo consumen el BFF y ms-workorders).
     expose:
       - "8080"
     env_file:
@@ -234,8 +238,6 @@ services:
       - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
-    volumes:
-      - ../digitalfix-ms-notify/wallet:/app/wallet:ro
     networks:
       - digitalfix-net
     depends_on:
@@ -289,7 +291,7 @@ services:
   # ----------------------------------------------------------------------------
   # Única puerta de entrada del frontend: valida el JWT de Entra ID (firma,
   # issuer, audience, vigencia, scope y rol) y enruta a ms-login, ms-user,
-  # ms-workorders y ms-admin-queues por la red interna digitalfix-net.
+  # ms-workorders, ms-catalog y ms-admin-queues por la red interna digitalfix-net.
   bff-gateway:
     build:
       context: ../digitalfix-bff-gateway
@@ -308,6 +310,7 @@ services:
       - MS_LOGIN_URL=http://ms-login-service:8081
       - MS_USER_URL=http://ms-user-service:8082
       - MS_WORKORDERS_URL=http://ms-workorders-service:8080
+      - MS_CATALOG_URL=http://ms-catalog-service:8080
       - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
     networks:
@@ -316,6 +319,7 @@ services:
       - ms-login
       - ms-user
       - ms-workorders
+      - ms-catalog
       - ms-admin-queues
     restart: unless-stopped
 

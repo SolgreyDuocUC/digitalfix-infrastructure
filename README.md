@@ -336,8 +336,8 @@ Cada microservicio tiene un puerto unico en desarrollo local, para poder levanta
 | digitalfix-ms-login | `8081` | `PORT` | Destino de `apiBaseUrl` en el `environment.ts` del frontend. |
 | digitalfix-ms-user | `8082` | `PORT` | |
 | digitalfix-ms-notify | `8083` | `PORT` | |
-| digitalfix-ms-catalog | `8084` | `SERVER_PORT` | Docker Compose publica `8084` -> `8080` del contenedor. |
-| digitalfix-ms-admin-queues | `8084` | `PORT` | Mismo puerto que ms-catalog en local: no levantar ambos fuera de Docker al mismo tiempo. En Docker no se publica. |
+| digitalfix-ms-catalog | `8088` | `SERVER_PORT` | Docker Compose publica `8088` -> `8080` del contenedor. ms-workorders lo llama con `MS_CATALOG_URL`. |
+| digitalfix-ms-admin-queues | `8084` | `PORT` | En Docker no se publica. |
 | digitalfix-bff-gateway | `8090` | `SERVER_PORT` | Unico backend publicado en el host. |
 | digitalfix-ms-workorders | `8085` | `SERVER_PORT` / `APP_PORT` | Docker Compose publica `8085` -> `8080` del contenedor. |
 | digitalfix-ms-report | `8086` | - | Reservado (sin implementacion aun). |
