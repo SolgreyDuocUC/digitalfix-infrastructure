@@ -1,0 +1,21 @@
+# Terraform state y cache
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+
+# Archivos con secretos — NUNCA hacer commit
+terraform.tfvars
+*.auto.tfvars
+
+# Archivos de ejemplo de Terraform
+terraform/
+
+# Logs y temporales
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
