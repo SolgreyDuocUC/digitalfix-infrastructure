@@ -1,0 +1,41 @@
+name: Deploy Infrastructure to EC2
+
+on:
+  push:
+    branches:
+      - deploy
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-infrastructure-ec2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH (git pull + docker compose up -d --build)
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT || secrets.EC2_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            cd "${{ secrets.EC2_APP_DIR || secrets.EC2_DEPLOY_PATH }}"
+
+            echo "==> Actualizando repositorio de infraestructura a origin/deploy"
+            git fetch origin deploy
+            git reset --hard origin/deploy
+
+            echo "==> Reconstruyendo y levantando servicios centralizados"
+            docker compose up -d --build
+
+            echo "==> Limpiando imágenes huérfanas"
+            docker image prune -f
+
+            echo "==> Estado actual de los contenedores"
+            docker compose ps
