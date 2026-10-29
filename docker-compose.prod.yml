@@ -1,0 +1,127 @@
+version: '3.8'
+
+networks:
+  digitalfix-net:
+    driver: bridge
+
+services:
+  # ==========================================
+  # BROKER DE MENSAJERÍA (RABBITMQ CLÚSTER)
+  # ==========================================
+  rabbit-node1:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rabbit-node1
+    hostname: rabbit-node1
+    ports:
+      - "${RABBITMQ_PORT_AMQP:5672}:5672"
+      - "${RABBITMQ_PORT_UI:15672}:15672"
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - digitalfix-net
+
+  # ==========================================
+  # ENTRYPOINT / BACKEND FOR FRONTEND (BFF)
+  # ==========================================
+  digitalfix-bff-gateway:
+    image: tu-usuario-docker/digitalfix-bff-gateway:latest
+    container_name: digitalfix-bff-gateway
+    ports:
+      - "${PORT_BFF:8090}:8090"
+    env_file: .env
+    depends_on:
+      rabbit-node1:
+        condition: service_healthy
+    networks:
+      - digitalfix-net
+
+  # ==========================================
+  # MICROSERVICIOS DE DOMINIO Y AUTENTICACIÓN
+  # ==========================================
+  ms-login:
+    image: tu-usuario-docker/digitalfix-ms-login:latest
+    container_name: ms-login-service
+    ports:
+      - "${PORT_MS_LOGIN:8081}:8081"
+    env_file: .env
+    networks:
+      - digitalfix-net
+
+  ms-user:
+    image: tu-usuario-docker/digitalfix-ms-user:latest
+    container_name: ms-user-service
+    ports:
+      - "${PORT_MS_USER:8082}:8082"
+    env_file: .env
+    networks:
+      - digitalfix-net
+
+  ms-notify:
+    image: tu-usuario-docker/digitalfix-ms-notify:latest
+    container_name: ms-digitalfix-notify
+    ports:
+      - "${PORT_MS_NOTIFY:8083}:8083"
+    env_file: .env
+    depends_on:
+      rabbit-node1:
+        condition: service_healthy
+    networks:
+      - digitalfix-net
+
+  ms-admin-queues:
+    image: tu-usuario-docker/digitalfix-ms-admin-queues:latest
+    container_name: ms-admin-queues
+    ports:
+      - "${PORT_MS_ADMIN_QUEUES:8084}:8084"
+    env_file: .env
+    depends_on:
+      rabbit-node1:
+        condition: service_healthy
+    networks:
+      - digitalfix-net
+
+  ms-workorders:
+    image: tu-usuario-docker/digitalfix-ms-workorders:latest
+    container_name: ms-workorders-service
+    ports:
+      - "${PORT_MS_WORKORDERS:8085}:8080" # Host EC2: Interno Spring Boot
+    env_file: .env
+    depends_on:
+      rabbit-node1:
+        condition: service_healthy
+    networks:
+      - digitalfix-net
+
+  ms-catalog:
+    image: tu-usuario-docker/digitalfix-ms-catalog:latest
+    container_name: ms-catalog-service
+    ports:
+      - "${PORT_MS_CATALOG:8086}:8080" # Host EC2: Interno Spring Boot
+    env_file: .env
+    networks:
+      - digitalfix-net
+
+  # ==========================================
+  # ANALÍTICA Y AUDITORÍA
+  # ==========================================
+  ms-report:
+    image: tu-usuario-docker/digitalfix-ms-report:latest
+    container_name: ms-report
+    ports:
+      - "${PORT_MS_REPORT:8087}:8087"
+    env_file: .env
+    networks:
+      - digitalfix-net
+
+  ms-audit:
+    image: tu-usuario-docker/digitalfix-ms-audit:latest
+    container_name: ms-audit
+    ports:
+      - "${PORT_MS_AUDIT:8088}:8088"
+    env_file: .env
+    networks:
+      - digitalfix-net

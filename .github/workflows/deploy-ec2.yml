@@ -1,0 +1,21 @@
+name: Despliegue Centralizado en AWS EC2
+
+on:
+  repository_dispatch:
+    types: [microservice-updated]
+  workflow_dispatch: # Permite ejecución manual desde la consola de GitHub
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Desplegar por SSH en la EC2 de Microservicios
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.AWS_EC2_MS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.AWS_EC2_SSH_KEY }}
+          script: |
+            cd ~/digitalfix
+            docker compose pull
+            docker compose up -d --remove-orphans

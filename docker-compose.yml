@@ -16,6 +16,7 @@
 #   - Si existen variables locales en los repositorios individuales, se combinan
 #     sin generar errores en caso de que falten (required: false).
 # ==============================================================================
+version: '3.8'
 
 networks:
   digitalfix-net:
