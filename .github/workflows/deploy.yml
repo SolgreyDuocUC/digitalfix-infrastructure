@@ -1,10 +1,39 @@
-name: Deploy Infrastructure to EC2
+name: Despliegue Centralizado DigitalFix a EC2
 
 on:
   push:
     branches:
       - deploy
   workflow_dispatch:
+    inputs:
+      service:
+        description: 'Servicio a desplegar'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - frontend
+          - bff-gateway
+          - ms-login
+          - ms-user
+          - ms-workorders
+          - ms-catalog
+          - ms-notify
+          - ms-admin-queues
+          - rabbitmq
+      branch:
+        description: 'Rama de Git a desplegar'
+        required: true
+        default: 'deploy'
+        type: string
+      update_code:
+        description: 'Actualizar código desde Git antes de compilar'
+        required: true
+        default: true
+        type: boolean
+  repository_dispatch:
+    types: [deploy-service, deploy]
 
 concurrency:
   group: deploy-infrastructure-ec2
@@ -12,10 +41,40 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to EC2
+    name: Despliegue a EC2
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH (git pull + docker compose up -d --build)
+      - name: Resolver parámetros de despliegue
+        id: params
+        run: |
+          SERVICE="all"
+          BRANCH="deploy"
+          UPDATE_CODE="true"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SERVICE="${{ github.event.inputs.service }}"
+            BRANCH="${{ github.event.inputs.branch }}"
+            UPDATE_CODE="${{ github.event.inputs.update_code }}"
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            if [ -n "${{ github.event.client_payload.service }}" ]; then
+              SERVICE="${{ github.event.client_payload.service }}"
+            fi
+            if [ -n "${{ github.event.client_payload.branch }}" ]; then
+              BRANCH="${{ github.event.client_payload.branch }}"
+            fi
+          fi
+
+          echo "service=${SERVICE}" >> $GITHUB_OUTPUT
+          echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+          echo "update_code=${UPDATE_CODE}" >> $GITHUB_OUTPUT
+          echo "=========================================================="
+          echo "Disparando despliegue centralizado:"
+          echo "  - Servicio: ${SERVICE}"
+          echo "  - Rama:     ${BRANCH}"
+          echo "  - Git Pull: ${UPDATE_CODE}"
+          echo "=========================================================="
+
+      - name: Ejecutar despliegue vía SSH en EC2
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -25,17 +84,51 @@ jobs:
           script_stop: true
           script: |
             set -e
-            cd "${{ secrets.EC2_APP_DIR || secrets.EC2_DEPLOY_PATH }}"
 
-            echo "==> Actualizando repositorio de infraestructura a origin/deploy"
-            git fetch origin deploy
-            git reset --hard origin/deploy
+            TARGET_SERVICE="${{ steps.params.outputs.service }}"
+            TARGET_BRANCH="${{ steps.params.outputs.branch }}"
+            UPDATE_CODE="${{ steps.params.outputs.update_code }}"
 
-            echo "==> Reconstruyendo y levantando servicios centralizados"
-            docker compose up -d --build
+            echo "==> [SSH] Iniciando sesión en el servidor..."
+            APP_DIR="${{ secrets.EC2_APP_DIR || secrets.EC2_DEPLOY_PATH }}"
 
-            echo "==> Limpiando imágenes huérfanas"
-            docker image prune -f
+            # Resolución inteligente del directorio base
+            if [ -z "$APP_DIR" ]; then
+              if [ -d "$HOME/DigitalFix" ]; then
+                APP_DIR="$HOME/DigitalFix"
+              elif [ -d "$HOME/digitalfix" ]; then
+                APP_DIR="$HOME/digitalfix"
+              else
+                APP_DIR="$PWD"
+              fi
+            fi
 
-            echo "==> Estado actual de los contenedores"
-            docker compose ps
+            if [ "$(basename "$APP_DIR")" = "digitalfix-infrastructure" ]; then
+              INFRA_DIR="$APP_DIR"
+              BASE_DIR="$(dirname "$APP_DIR")"
+            elif [ -d "$APP_DIR/digitalfix-infrastructure" ]; then
+              INFRA_DIR="$APP_DIR/digitalfix-infrastructure"
+              BASE_DIR="$APP_DIR"
+            else
+              BASE_DIR="$APP_DIR"
+              INFRA_DIR="$APP_DIR/digitalfix-infrastructure"
+            fi
+
+            mkdir -p "$BASE_DIR"
+
+            # Actualizar o clonar digitalfix-infrastructure
+            if [ ! -d "$INFRA_DIR/.git" ]; then
+              echo "==> Clonando digitalfix-infrastructure ($TARGET_BRANCH)..."
+              git clone --branch "$TARGET_BRANCH" --single-branch https://github.com/SolgreyDuocUC/digitalfix-infrastructure.git "$INFRA_DIR"
+            else
+              echo "==> Actualizando digitalfix-infrastructure ($TARGET_BRANCH)..."
+              cd "$INFRA_DIR"
+              git fetch origin "$TARGET_BRANCH" 2>/dev/null || git fetch origin
+              git checkout "$TARGET_BRANCH" 2>/dev/null || git checkout -b "$TARGET_BRANCH" "origin/$TARGET_BRANCH" 2>/dev/null || true
+              git reset --hard "origin/$TARGET_BRANCH" 2>/dev/null || git reset --hard "origin/main"
+            fi
+
+            # Ejecutar el script centralizado
+            cd "$INFRA_DIR"
+            chmod +x deploy/deploy.sh
+            ./deploy/deploy.sh "$TARGET_SERVICE" "$TARGET_BRANCH" "$UPDATE_CODE"

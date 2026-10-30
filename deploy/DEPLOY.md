@@ -1,196 +1,152 @@
-# Despliegue en AWS (EC2) — estado actual del proyecto
+# DigitalFix - Guía de Despliegue Centralizado y CI/CD
 
-Este documento reemplaza al plan generico que asumia un `ms-digitalfix-bff.jar`
-y un unico "microservicio de catalogo/ordenes": ese BFF todavia no existe
-(sigue como "componente pendiente" en el README de este repo) y de los
-`digitalfix-ms-*` solo dos tienen codigo desplegable hoy. Cubre solo la parte
-local (Paso 1); el resto (Security Groups, instancias EC2, Azure AD) lo haces
-tu en la consola de AWS Academy siguiendo esta misma guia.
+Esta guía documenta la arquitectura y el procedimiento de despliegue centralizado de la plataforma **DigitalFix** en AWS EC2, orquestado íntegramente desde este repositorio (`digitalfix-infrastructure`).
 
-## Que hay realmente para desplegar
+---
 
-| Repo | Estado | Puerto contenedor | Notas |
+## 1. Arquitectura de Despliegue Centralizado
+
+Para evitar dispersar credenciales SSH y scripts duplicados en los 9 repositorios del proyecto, el despliegue está **completamente centralizado en `digitalfix-infrastructure`**:
+
+```
+                                  GitHub
+  [digitalfix-infrastructure]  ◄────────  Push a rama 'deploy' o 'workflow_dispatch'
+              ▲
+              │ (dispatches opcional)
+  [digitalfix-frontend]
+  [digitalfix-bff-gateway]
+  [digitalfix-ms-*]
+              │
+              ▼ SSH Action (appleboy/ssh-action)
+  ┌─────────────────────────────────────────────────────────────┐
+  │                         AWS EC2                             │
+  │                                                             │
+  │  ~/DigitalFix/                                              │
+  │    ├── digitalfix-infrastructure/  (deploy/deploy.sh)       │
+  │    ├── digitalfix-bff-gateway/                              │
+  │    ├── digitalfix-frontend/                                 │
+  │    ├── digitalfix-ms-login/                                 │
+  │    ├── digitalfix-ms-user/                                  │
+  │    ├── digitalfix-ms-workorders/                            │
+  │    ├── digitalfix-ms-catalog/                               │
+  │    ├── digitalfix-ms-notify/                                │
+  │    └── digitalfix-ms-admin-queues/                          │
+  │                                                             │
+  │  Docker Compose:                                            │
+  │    - Frontend Angular SSR (:4200 -> :4000)                  │
+  │    - BFF Gateway Spring Security (:8090)                    │
+  │    - Clúster RabbitMQ 2 nodos (:15672)                      │
+  │    - 6 Microservicios internos en red 'digitalfix-net'      │
+  │    - Conexión Oracle Cloud Wallet mTLS                      │
+  └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Métodos para Desplegar
+
+### Método A: Manual desde la interfaz de GitHub (Recomendado)
+
+1. Ve a: [Acciones de digitalfix-infrastructure](https://github.com/SolgreyDuocUC/digitalfix-infrastructure/actions).
+2. Selecciona el workflow **"Despliegue Centralizado DigitalFix a EC2"**.
+3. Haz clic en **"Run workflow"**.
+4. Configura las opciones:
+   - **Servicio a desplegar**:
+     - `all`: reconstruye y actualiza la plataforma completa.
+     - `frontend`: despliega solo el frontend Web Angular SSR.
+     - `bff-gateway`: despliega solo el BFF / API Gateway.
+     - `ms-login`: despliega el microservicio de autenticación.
+     - `ms-user`: despliega el microservicio de usuarios.
+     - `ms-workorders`: despliega el microservicio de órdenes de trabajo.
+     - `ms-catalog`: despliega el microservicio de catálogo y repuestos.
+     - `ms-notify`: despliega el microservicio de notificaciones.
+     - `ms-admin-queues`: despliega el microservicio de colas.
+     - `rabbitmq`: despliega el clúster RabbitMQ de 2 nodos.
+   - **Rama de Git**: `deploy` (o la rama que desees probar).
+   - **Actualizar código desde Git**: `true` (por defecto).
+5. Haz clic en el botón verde **Run workflow**.
+
+---
+
+### Método B: Automático por Git Push
+
+Al hacer `git push origin deploy` sobre el repositorio `digitalfix-infrastructure`, GitHub Actions disparará automáticamente el despliegue de toda la plataforma a la instancia EC2.
+
+---
+
+### Método C: Ejecución directa en el servidor EC2
+
+Si te encuentras conectado a la instancia EC2 por SSH, puedes ejecutar el despliegue directamente:
+
+```bash
+# Entrar a la carpeta de infraestructura
+cd ~/DigitalFix/digitalfix-infrastructure
+
+# Dar permisos de ejecución (si no los tiene)
+chmod +x deploy/deploy.sh deploy.sh
+
+# Desplegar toda la plataforma
+./deploy.sh all deploy true
+
+# O desplegar un microservicio específico:
+./deploy.sh frontend deploy true
+./deploy.sh bff-gateway deploy true
+./deploy.sh ms-login deploy true
+```
+
+---
+
+### Método D: Despliegue desde repositorios individuales
+
+Cada microservicio (`digitalfix-frontend`, `digitalfix-bff-gateway`, `digitalfix-ms-*`) ejecuta su propio job de **Build & Test** (Maven / Angular) en su Pull Request o Push.
+
+Para activar el despliegue automático desde esos repositorios hacia la infraestructura:
+1. Agrega el secreto `INFRA_DISPATCH_TOKEN` (un GitHub Personal Access Token con permiso `repo`) en el repositorio individual.
+2. Al terminar el build exitosamente, el workflow notificará a `digitalfix-infrastructure` mediante `repository_dispatch` para que ejecute el despliegue de ese microservicio de forma automática.
+
+---
+
+## 3. Configuración de Secretos en GitHub (Solo en este Repositorio)
+
+Los secretos de despliegue ahora se configuran **una única vez** en `digitalfix-infrastructure` (`Settings > Secrets and variables > Actions`):
+
+| Secreto | Descripción | Obligatorio | Ejemplo |
 |---|---|---|---|
-| `digitalfix-frontend` | Listo, con Dockerfile + docker-compose.yml propios | 4000 (host 4200) | Angular en **modo SSR** (Express), no es un SPA estatico — no usar nginx. |
-| `digitalfix-ms-login` | Listo, con Dockerfile | 8080 | Valida JWT de Azure AD (issuer/audience). |
-| `digitalfix-ms-workorders` | Listo, con Dockerfile | 8080 (mapeado a 8081 en host) | **No valida JWT todavia** — ver nota de seguridad abajo. |
-| `digitalfix-ms-user` | Codigo sin Dockerfile | — | No desplegable aun. |
-| `digitalfix-ms-audit`, `-catalog`, `-notify`, `-report` | Repos vacios (solo `.git`) | — | No desplegable aun. |
-| `ms-digitalfix-bff` | No existe | — | "Componente pendiente" segun el README de este repo. |
+| `EC2_HOST` | IP pública o nombre DNS de la instancia EC2 | **Sí** | `54.210.123.45` |
+| `EC2_USERNAME` | Usuario SSH de la instancia | **Sí** | `ec2-user` o `ubuntu` |
+| `EC2_SSH_KEY` | Contenido completo de la llave privada `.pem` | **Sí** | `-----BEGIN RSA PRIVATE KEY-----...` |
+| `EC2_APP_DIR` | Ruta raíz donde se ubican los proyectos en la EC2 | No | `/home/ec2-user/DigitalFix` |
+| `EC2_PORT` | Puerto SSH | No | `22` |
 
-Los Dockerfile de `ms-login` y `ms-workorders` compilan desde codigo fuente
-dentro del propio build de Docker (`mvn package` en la etapa `builder`); el
-del frontend hace lo mismo con `npm run build`. Esto significa que **no hace
-falta compilar nada a mano antes de subir a EC2** — basta con clonar los
-repos ahi y correr `docker compose up -d --build`. El "Paso 1" del plan
-original (`ng build` / `mvn package` locales) no es necesario con este setup.
+> [!TIP]
+> Si la IP de tu laboratorio de AWS Academy cambia, solo debes actualizar `EC2_HOST` en este repositorio (`digitalfix-infrastructure`). No necesitas tocar los otros repositorios.
 
-### Nota de seguridad importante
+---
 
-`digitalfix-ms-workorders` explicitamente no valida el JWT de Azure AD (esa
-validacion la hara `ms-digitalfix-bff` cuando exista — ver el comentario en su
-`application.yaml`). Si abres su puerto 8081 a `0.0.0.0/0` en el Security
-Group, cualquiera en internet puede leer/crear/modificar ordenes de trabajo
-sin autenticarse. Mientras no exista el BFF, restringe el inbound del puerto
-8081 (y del 1521 si usas Oracle en Docker, ver mas abajo) al Security Group o
-a la IP publica de la instancia `ec2-frontend-login`, nunca a "Anywhere".
+## 4. Puertos y Servicios Expuestos en la EC2
 
-## Layout de instancias (adaptando el plan de 2 EC2)
+| Servicio | Puerto Host | Puerto Contenedor | Acceso | Notas |
+|---|---|---|---|---|
+| **Frontend Web** | `4200` | `4000` | Público | Angular SSR con MSAL |
+| **BFF Gateway** | `8090` | `8090` | Público | Valida JWT de Entra ID y enruta a microservicios |
+| **RabbitMQ Web** | `15672` | `15672` | localhost / SSH | Consola web de administración |
+| **ms-login** | — | `8081` | Interno | Red `digitalfix-net` |
+| **ms-user** | — | `8082` | Interno | Red `digitalfix-net` |
+| **ms-workorders** | — | `8080` | Interno | Red `digitalfix-net` |
+| **ms-catalog** | — | `8080` | Interno | Red `digitalfix-net` |
+| **ms-notify** | — | `8083` | Interno | Red `digitalfix-net` |
+| **ms-admin-queues** | — | `8084` | Interno | Red `digitalfix-net` |
 
-- **ec2-frontend-login**: frontend (Angular SSR) + `ms-login` (+ Oracle si lo
-  corres en Docker, ver abajo).
-- **ec2-workorders**: `ms-workorders`, apuntando su datasource al Oracle de la
-  otra instancia (o a Oracle Cloud si usan esa opcion).
+---
 
-### Base de datos Oracle
+## 5. Script de Despliegue (`deploy/deploy.sh`)
 
-`ms-login` y `ms-workorders` comparten el mismo Oracle. Su
-`docker-compose.yaml` local levanta un contenedor `gvenzl/oracle-free:23-slim`
-propio, pero **ese contenedor pide ~2 GB de RAM**, mas de lo que tiene una
-`t2.micro`/`t3.micro` (1 GB) de AWS Academy. Dos opciones:
-
-1. **Recomendada**: usar una instancia Oracle Cloud Free Tier externa (como ya
-   contemplaba el plan original con `jdbc:oracle:thin:@tu_instancia_oracle_cloud`)
-   y apuntar `DB_URL` de ambos microservicios ahi. No consume RAM de las EC2.
-   Si la Oracle Cloud tiene IP fija, no necesitas abrir el puerto 1521 en
-   ningun Security Group de tus EC2 (solo egress saliente, que por defecto
-   esta permitido).
-2. Si prefieres Oracle en Docker sobre `ec2-frontend-login`: usa una instancia
-   mas grande (`t3.medium` o superior, si el laboratorio de AWS Academy lo
-   permite) y abre el puerto 1521 en su Security Group **solo** para el
-   Security Group/IP de `ec2-workorders`.
-
-Los `docker-compose.yml` de `deploy/ec2-frontend-login/` y
-`deploy/ec2-workorders/` de este repo dejan `DB_URL`/`DB_USER`/`DB_PASSWORD`
-como variables de entorno para que sirvan con cualquiera de las dos opciones.
-
-## Paso 1 (local, hecho): archivos preparados
-
-- [environment.prod.ts](../../digitalfix-frontend/frontend/src/app/environment/environment.prod.ts)
-  en `digitalfix-frontend` — apunta `apiBaseUrl` y `workOrdersApiUrl` a
-  placeholders `<EC2_..._PUBLIC_IP>`. `redirectUri` no necesita tocarse:
-  ya usa `window.location.origin`, asi que se adapta solo a la IP/dominio real
-  siempre que la agregues como Redirect URI en Azure AD (Paso 5).
-- `angular.json` — se agrego `fileReplacements` a la configuracion
-  `production` para que `ng build --configuration production` use
-  `environment.prod.ts` en vez de `environment.ts`.
-- [deploy/ec2-frontend-login/docker-compose.yml](ec2-frontend-login/docker-compose.yml)
-  y [deploy/ec2-workorders/docker-compose.yml](ec2-workorders/docker-compose.yml)
-  — listos para copiar a cada instancia (ver Paso 4).
-
-Antes de compilar el frontend, reemplaza los dos placeholders en
-`environment.prod.ts` por las IP publicas reales una vez que existan las EC2.
-
-## Paso 2: Security Groups (a definir en consola AWS por ti)
-
-**sg-frontend-login** (instancia `ec2-frontend-login`):
-- Inbound `TCP 4200` — Source `0.0.0.0/0` (frontend).
-- Inbound `TCP 8080` — Source `0.0.0.0/0` (`ms-login`, lo llama el navegador
-  directo, no hay BFF todavia).
-- Inbound `TCP 22` — Source: tu IP.
-- (Si corres Oracle en esta instancia) Inbound `TCP 1521` — Source:
-  `sg-workorders` (no `0.0.0.0/0`).
-
-**sg-workorders** (instancia `ec2-workorders`):
-- Inbound `TCP 8081` — Source: `sg-frontend-login` (no `0.0.0.0/0`, ver nota
-  de seguridad arriba).
-- Inbound `TCP 22` — Source: tu IP.
-
-## Paso 3: Instancias EC2 (a definir en consola AWS por ti)
-
-Igual que el plan original: Ubuntu Server 24.04 LTS, `t2.micro`/`t3.micro`
-(salvo que uses Oracle en Docker, ver arriba), key pair propio, Auto-assign
-Public IP en `Enable`, cada instancia con su Security Group correspondiente.
-
-## Paso 4: Instalar Docker y clonar los repos en cada EC2
-
-```bash
-ssh -i "tu-llave.pem" ubuntu@<IP_PUBLICA_EC2>
-
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y docker.io docker-compose-v2 git
-sudo systemctl enable --now docker
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-En `ec2-frontend-login`:
-
-```bash
-mkdir -p ~/digitalfix && cd ~/digitalfix
-git clone https://github.com/Blacknight3648/digitalfix-frontend.git
-git clone https://github.com/Blacknight3648/digitalfix-ms-login.git
-# copia (scp) o pega aqui el docker-compose.yml de deploy/ec2-frontend-login/
-```
-
-En `ec2-workorders`:
-
-```bash
-mkdir -p ~/digitalfix && cd ~/digitalfix
-git clone https://github.com/Blacknight3648/digitalfix-ms-workorders.git
-# copia (scp) o pega aqui el docker-compose.yml de deploy/ec2-workorders/
-```
-
-Repos privados: usa un Personal Access Token de GitHub en la URL del clone, o
-`ssh` con una deploy key — no subas credenciales al `docker-compose.yml`.
-
-## Paso 5: variables de entorno y arranque
-
-En cada instancia, junto al `docker-compose.yml`, crea un `.env`:
-
-`ec2-frontend-login/.env`:
-```
-DB_URL=jdbc:oracle:thin:@//<ORACLE_HOST>:1521/<SERVICE_NAME>
-DB_USER=...
-DB_PASSWORD=...
-AZURE_TENANT_ID=3fb8463e-0e33-4b7d-adc1-2a47c707831e
-AZURE_CLIENT_ID=9494b59c-9c6e-4a0f-91ae-ae90212882e7
-CORS_ALLOWED_ORIGINS=http://<EC2_FRONTEND_LOGIN_PUBLIC_IP>:4200
-```
-
-`ec2-workorders/.env`:
-```
-DB_URL=jdbc:oracle:thin:@//<ORACLE_HOST>:1521/<SERVICE_NAME>
-DB_USER=...
-DB_PASSWORD=...
-CORS_ALLOWED_ORIGINS=http://<EC2_FRONTEND_LOGIN_PUBLIC_IP>:4200
-```
-
-Luego, en cada instancia:
-
-```bash
-cd ~/digitalfix && docker compose up -d --build
-docker compose ps
-docker compose logs -f
-```
-
-Con las IPs publicas ya asignadas, vuelve al repo del frontend, actualiza los
-dos placeholders en `environment.prod.ts` y reconstruye el contenedor del
-frontend (`docker compose up -d --build frontend` en `ec2-frontend-login`).
-
-## Paso 6: Azure AD
-
-Agrega `http://<IP_PUBLICA_EC2_FRONTEND_LOGIN>:4200` como Redirect URI en la
-App Registration del frontend (mismo tenant que ya usa `ms-login`). No hace
-falta tocar `redirectUri` en el codigo: ya se calcula solo desde
-`window.location.origin`.
-
-## Paso 7: verificacion
-
-1. Abrir `http://<IP_PUBLICA_EC2_FRONTEND_LOGIN>:4200`.
-2. Iniciar sesion con Microsoft.
-3. DevTools (F12) → Network → confirmar `Authorization: Bearer ...` en las
-   requests hacia `:8080` (`ms-login`).
-4. Probar una accion contra `ms-workorders` (`:8081`) y confirmar en los logs
-   del contenedor (`docker compose logs -f ms-workorders`) que la peticion
-   llega — recordando que hoy ese servicio no exige el token.
-
-## Pendiente para cuando exista `ms-digitalfix-bff`
-
-Cuando se incorpore el BFF (y, si la pauta de tu evaluacion lo exige, el API
-Gateway con JWT Authorizer delante de todo), este layout cambia: el frontend
-dejara de llamar a `ms-login`/`ms-workorders` directo y pasara a llamar solo
-al BFF, y `ms-workorders` podra cerrar su puerto al publico por completo
-(solo accesible desde el BFF). Aviso para no dejarlo como deuda tecnica
-silenciosa: hoy ese es el diseno "final" documentado en el README de este
-repo, esto es un despliegue intermedio mientras el BFF no existe.
+El script se encarga automáticamente de:
+1. Verificar y resolver rutas de todos los repositorios.
+2. Clonar cualquier repositorio que no exista en el servidor.
+3. Actualizar a la rama especificada (`git fetch` y `git reset --hard`).
+4. Crear carpetas de wallet Oracle en los microservicios que lo requieren.
+5. Detectar la IP pública de la EC2 (mediante IMDSv2 / IMDSv1) y configurar `CORS_ALLOWED_ORIGINS` en `.env`.
+6. Compilar y levantar los contenedores con `docker compose up -d --build`.
+7. Limpiar imágenes huérfanas (`docker image prune -f`).
+8. Imprimir el estado de salud de todos los contenedores y los enlaces de acceso.
