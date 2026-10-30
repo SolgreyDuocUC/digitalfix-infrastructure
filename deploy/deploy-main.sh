@@ -26,6 +26,7 @@ SITE_DOMAIN="${2:-}"
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_DIR="$(dirname "$INFRA_DIR")"
 
+ORACLE_WAIT_SECONDS="${ORACLE_WAIT_SECONDS:-360}"
 BACKEND_SERVICES="ms-login ms-user ms-catalog ms-workorders ms-notify ms-admin-queues bff-gateway"
 INFRA_SERVICES="rabbitmq rabbitmq-node2"
 
@@ -91,19 +92,37 @@ check_wallet() {
   esac
 }
 
-# Falla el despliegue si un servicio no logra conectarse a Oracle al arrancar.
+# Espera a que los servicios con Oracle terminen de arrancar. Falla si alguno
+# reporta un error ORA- durante el arranque o no arranca a tiempo.
 verify_oracle() {
-  local container failed=0
-  sleep 90
-  for container in ms-login-service ms-user-service ms-catalog-service ms-workorders-service; do
-    if docker logs --since 85s "$container" 2>&1 | grep -m1 'ORA-'; then
-      echo "ERROR: $container no se conecta a Oracle" >&2
-      failed=1
+  local pending="ms-login-service ms-user-service ms-catalog-service ms-workorders-service"
+  local deadline=$((SECONDS + ORACLE_WAIT_SECONDS))
+  local container logs still
+
+  while [ -n "$pending" ]; do
+    still=""
+    for container in $pending; do
+      logs="$(docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' "$container")" "$container" 2>&1 || true)"
+      if grep -qE 'Started [A-Za-z]+ in ' <<<"$logs"; then
+        echo "    $container arriba"
+      elif grep -m1 'ORA-' <<<"$logs"; then
+        echo "ERROR: $container no se conecta a Oracle" >&2
+        return 1
+      else
+        still="$still $container"
+      fi
+    done
+    pending="$still"
+
+    if [ -n "$pending" ]; then
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        echo "ERROR: no arrancaron a tiempo:$pending" >&2
+        return 1
+      fi
+      sleep 10
     fi
   done
-  return "$failed"
 }
-
 detect_public_ip() {
   local token ip=""
   token="$(curl -s -m 2 -X PUT http://169.254.169.254/latest/api/token \
