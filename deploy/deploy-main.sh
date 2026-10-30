@@ -92,6 +92,15 @@ check_wallet() {
   esac
 }
 
+# DuckDNS solo debe actualizarse desde el frontend, que es la entrada publica.
+# Desde esta instancia dejaria el dominio apuntando al backend.
+remove_duckdns_cron() {
+  if crontab -l 2>/dev/null | grep -q duckdns; then
+    crontab -l | { grep -v duckdns || true; } | crontab -
+    echo "==> Cron de DuckDNS eliminado de esta instancia"
+  fi
+}
+
 # Espera a que los servicios con Oracle terminen de arrancar. Falla si alguno
 # reporta un error ORA- durante el arranque o no arranca a tiempo.
 verify_oracle() {
@@ -151,6 +160,8 @@ if [ ! -f .env ]; then
 fi
 
 echo "==> Objetivo: $TARGET"
+
+remove_duckdns_cron
 
 for service in $BUILD_LIST; do
   echo "==> Actualizando $service"
