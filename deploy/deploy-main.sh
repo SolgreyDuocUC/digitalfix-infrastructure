@@ -11,11 +11,12 @@
 #             ms-workorders|ms-catalog|ms-notify|ms-admin-queues
 #   dominio:  opcional. Sin dominio se usa <ip-publica>.sslip.io.
 #
-#   config: no compila. Solo ajusta CORS y Caddy a la IP actual de la instancia.
+#   config: no compila. Solo ajusta CORS y aplica cambios de configuracion.
 #   all:    actualiza y compila todos los servicios, uno a la vez.
 #
 # El frontend no pasa por aqui: se despliega con el workflow de su propio repo
-# en ~/frontend/digitalfix-frontend.
+# en ~/frontend/digitalfix-frontend, en su propia instancia. Caddy (HTTPS) vive
+# en esa instancia y enruta /api/* al puerto 8090 de esta por su IP privada.
 # ==============================================================================
 
 set -euo pipefail
@@ -24,7 +25,6 @@ TARGET="${1:-config}"
 SITE_DOMAIN="${2:-}"
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_DIR="$(dirname "$INFRA_DIR")"
-CADDY_DIR="$HOME/caddy"
 
 BACKEND_SERVICES="ms-login ms-user ms-catalog ms-workorders ms-notify ms-admin-queues bff-gateway"
 INFRA_SERVICES="rabbitmq rabbitmq-node2"
@@ -124,35 +124,6 @@ update_cors() {
   sed -i "s#^CORS_ALLOWED_ORIGINS=.*#CORS_ALLOWED_ORIGINS=http://localhost:4200,http://localhost:4000,http://$ip:4200,https://$domain#" .env
 }
 
-update_caddy() {
-  local domain="$1"
-  local new_config
-
-  new_config="$(cat <<FIN
-$domain {
-  handle /api/* {
-    reverse_proxy localhost:8090
-  }
-  handle {
-    reverse_proxy localhost:4200
-  }
-}
-FIN
-)"
-
-  mkdir -p "$CADDY_DIR"
-  if [ ! -f "$CADDY_DIR/Caddyfile" ] || [ "$(cat "$CADDY_DIR/Caddyfile")" != "$new_config" ]; then
-    printf '%s\n' "$new_config" > "$CADDY_DIR/Caddyfile"
-    docker restart caddy >/dev/null 2>&1 || true
-  fi
-
-  if [ -z "$(docker ps -aq --filter name='^caddy$')" ]; then
-    docker run -d --name caddy --restart unless-stopped --network host \
-      -v caddy_data:/data -v "$CADDY_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine
-  fi
-  docker start caddy >/dev/null
-}
-
 cd "$INFRA_DIR"
 
 if [ ! -f .env ]; then
@@ -178,9 +149,8 @@ if [ -z "$PUBLIC_IP" ]; then
 fi
 DOMAIN="${SITE_DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
 
-echo "==> Ajustando CORS y Caddy para $DOMAIN"
+echo "==> Ajustando CORS para $DOMAIN"
 update_cors "$PUBLIC_IP" "$DOMAIN"
-update_caddy "$DOMAIN"
 
 # Se compila de a un servicio para no agotar la memoria de la instancia.
 for service in $BUILD_LIST; do

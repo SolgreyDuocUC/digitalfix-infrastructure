@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       service:
-        description: "config: solo ajusta CORS y Caddy a la IP actual, sin compilar"
+        description: "config: solo ajusta CORS, sin compilar"
         required: true
         default: "config"
         type: choice
