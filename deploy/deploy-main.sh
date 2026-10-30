@@ -84,8 +84,24 @@ check_wallet() {
         echo "ERROR: falta el wallet de Oracle en $wallet" >&2
         exit 1
       fi
+      # Los contenedores corren sin root: el wallet montado debe ser legible.
+      chmod -R a+rX "$(dirname "$wallet")"
+      stat -c "    wallet %a %U %n" "$wallet"
       ;;
   esac
+}
+
+# Falla el despliegue si un servicio no logra conectarse a Oracle al arrancar.
+verify_oracle() {
+  local container failed=0
+  sleep 90
+  for container in ms-login-service ms-user-service ms-catalog-service ms-workorders-service; do
+    if docker logs --since 85s "$container" 2>&1 | grep -m1 'ORA-'; then
+      echo "ERROR: $container no se conecta a Oracle" >&2
+      failed=1
+    fi
+  done
+  return "$failed"
 }
 
 detect_public_ip() {
@@ -179,6 +195,9 @@ docker compose up -d $INFRA_SERVICES $BACKEND_SERVICES
 
 docker image prune -f
 docker compose ps
+
+echo "==> Verificando la conexion a Oracle"
+verify_oracle
 
 echo "======================================================================"
 echo " Despliegue finalizado"
