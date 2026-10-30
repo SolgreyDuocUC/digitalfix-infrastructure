@@ -5,8 +5,11 @@
 # Lo ejecuta .github/workflows/deploy-main.yml dentro de la EC2.
 #
 # Uso:
-#   bash deploy/deploy-main.sh [config|all|bff-gateway|ms-login|ms-user|
-#                               ms-workorders|ms-catalog|ms-notify|ms-admin-queues]
+#   bash deploy/deploy-main.sh [servicio] [dominio]
+#
+#   servicio: config|all|bff-gateway|ms-login|ms-user|
+#             ms-workorders|ms-catalog|ms-notify|ms-admin-queues
+#   dominio:  opcional. Sin dominio se usa <ip-publica>.sslip.io.
 #
 #   config: no compila. Solo ajusta CORS y Caddy a la IP actual de la instancia.
 #   all:    actualiza y compila todos los servicios, uno a la vez.
@@ -18,6 +21,7 @@
 set -euo pipefail
 
 TARGET="${1:-config}"
+SITE_DOMAIN="${2:-}"
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_DIR="$(dirname "$INFRA_DIR")"
 CADDY_DIR="$HOME/caddy"
@@ -156,7 +160,7 @@ if [ -z "$PUBLIC_IP" ]; then
   echo "ERROR: no se pudo detectar la IP publica de la instancia" >&2
   exit 1
 fi
-DOMAIN="${PUBLIC_IP//./-}.sslip.io"
+DOMAIN="${SITE_DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
 
 echo "==> Ajustando CORS y Caddy para $DOMAIN"
 update_cors "$PUBLIC_IP" "$DOMAIN"

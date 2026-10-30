@@ -41,12 +41,17 @@ jobs:
         env:
           INPUT_SERVICE: ${{ github.event.inputs.service }}
           PAYLOAD_SERVICE: ${{ github.event.client_payload.service }}
+          SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
         run: |
           SERVICE="${INPUT_SERVICE:-${PAYLOAD_SERVICE:-config}}"
           case "$SERVICE" in
             config|all|bff-gateway|ms-login|ms-user|ms-workorders|ms-catalog|ms-notify|ms-admin-queues) ;;
             *) echo "::error::Servicio no permitido: $SERVICE"; exit 1 ;;
           esac
+          if [ -n "$SITE_DOMAIN" ] && ! [[ "$SITE_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::SITE_DOMAIN no es un dominio valido"
+            exit 1
+          fi
           echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
 
       - name: Set up SSH Key
@@ -59,11 +64,12 @@ jobs:
           HOST: ${{ secrets.EC2_HOST }}
           USER: ${{ secrets.EC2_USER }}
           SERVICE: ${{ steps.target.outputs.service }}
+          SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
         run: |
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=30 $USER@$HOST "
             set -e
             cd ~/DigitalFix/digitalfix-infrastructure
             git fetch origin +refs/heads/main:refs/remotes/origin/main
             git checkout -f -B main origin/main
-            bash deploy/deploy-main.sh $SERVICE
+            bash deploy/deploy-main.sh $SERVICE $SITE_DOMAIN
           "
