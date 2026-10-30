@@ -1,0 +1,69 @@
+name: Deploy Backend to AWS EC2
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "deploy/deploy-main.sh"
+      - "docker-compose.yml"
+      - "mq/**"
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "config: solo ajusta CORS y Caddy a la IP actual, sin compilar"
+        required: true
+        default: "config"
+        type: choice
+        options:
+          - config
+          - all
+          - bff-gateway
+          - ms-login
+          - ms-user
+          - ms-workorders
+          - ms-catalog
+          - ms-notify
+          - ms-admin-queues
+  repository_dispatch:
+    types: [ deploy-main ]
+
+concurrency:
+  group: deploy-backend-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Resolve target service
+        id: target
+        env:
+          INPUT_SERVICE: ${{ github.event.inputs.service }}
+          PAYLOAD_SERVICE: ${{ github.event.client_payload.service }}
+        run: |
+          SERVICE="${INPUT_SERVICE:-${PAYLOAD_SERVICE:-config}}"
+          case "$SERVICE" in
+            config|all|bff-gateway|ms-login|ms-user|ms-workorders|ms-catalog|ms-notify|ms-admin-queues) ;;
+            *) echo "::error::Servicio no permitido: $SERVICE"; exit 1 ;;
+          esac
+          echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH Key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+
+      - name: Deploy to EC2 via SSH
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+          SERVICE: ${{ steps.target.outputs.service }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=30 $USER@$HOST "
+            set -e
+            cd ~/DigitalFix/digitalfix-infrastructure
+            git fetch origin +refs/heads/main:refs/remotes/origin/main
+            git checkout -f -B main origin/main
+            bash deploy/deploy-main.sh $SERVICE
+          "
