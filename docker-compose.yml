@@ -17,6 +17,15 @@
 #     sin generar errores en caso de que falten (required: false).
 # ==============================================================================
 
+# Memoria (EC2 t3.medium, 4 GB): cada contenedor tiene mem_limit. Sin limite, cada
+# JVM reserva por defecto hasta el 25 % de la RAM del host (~1 GB) y las 7 JVM +
+# 2 nodos RabbitMQ suman mas de 7 GB: la instancia entra en swap, el GC no para,
+# el kernel mata contenedores (OOM) y cada servicio tarda minutos en arrancar.
+# Reparto: 4 servicios con Oracle x 448m + BFF/notify/admin-queues x 320m +
+# 2 RabbitMQ x 384m = ~3.5 GB. JDK_JAVA_OPTIONS (JVM_MEMORY_OPTS) dimensiona el
+# heap al 60 % del limite y deja el resto para metaspace, hilos y buffers.
+# Si un servicio muere con OOMKilled, sube su variable *_MEMORY en el .env.
+
 networks:
   digitalfix-net:
     name: digitalfix-net
@@ -38,6 +47,7 @@ services:
   rabbitmq:
     image: rabbitmq:3.12-management-alpine
     container_name: digitalfix-rabbitmq-node1
+    mem_limit: ${RABBITMQ_MEMORY:-384m}
     hostname: rabbitmq-node1
     # AMQP (5672) solo dentro de digitalfix-net: ms-notify se conecta por el
     # nombre "rabbitmq". La consola web (15672) se publica solo en 127.0.0.1:
@@ -69,6 +79,7 @@ services:
   rabbitmq-node2:
     image: rabbitmq:3.12-management-alpine
     container_name: digitalfix-rabbitmq-node2
+    mem_limit: ${RABBITMQ_MEMORY:-384m}
     hostname: rabbitmq-node2
     expose:
       - "5672"    # AMQP
@@ -98,6 +109,7 @@ services:
       context: ../digitalfix-ms-login
       dockerfile: Dockerfile
     container_name: ms-login-service
+    mem_limit: ${MS_LOGIN_MEMORY:-448m}
     # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
     expose:
       - "8081"
@@ -112,6 +124,7 @@ services:
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
       - ../digitalfix-ms-login/wallet:/app/wallet:ro
     networks:
@@ -126,6 +139,7 @@ services:
       context: ../digitalfix-ms-user
       dockerfile: Dockerfile
     container_name: ms-user-service
+    mem_limit: ${MS_USER_MEMORY:-448m}
     # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
     expose:
       - "8082"
@@ -139,6 +153,7 @@ services:
       - SERVER_PORT=8082
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
       - ../digitalfix-ms-user/wallet:/app/wallet:ro
     networks:
@@ -153,6 +168,7 @@ services:
       context: ../digitalfix-ms-workorders
       dockerfile: Dockerfile
     container_name: ms-workorders-service
+    mem_limit: ${MS_WORKORDERS_MEMORY:-448m}
     # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
     expose:
       - "8080"
@@ -173,6 +189,7 @@ services:
       - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
       - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
       - ../digitalfix-ms-workorders/wallet:/app/wallet:ro
     networks:
@@ -194,6 +211,7 @@ services:
       context: ../digitalfix-ms-catalog
       dockerfile: Dockerfile
     container_name: ms-catalog-service
+    mem_limit: ${MS_CATALOG_MEMORY:-448m}
     # Sin "ports": solo accesible dentro de digitalfix-net (lo consumen el BFF y ms-workorders).
     expose:
       - "8080"
@@ -208,6 +226,7 @@ services:
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
       - ../digitalfix-ms-catalog/wallet:/app/wallet:ro
     networks:
@@ -222,6 +241,7 @@ services:
       context: ../digitalfix-ms-notify/ms.notify
       dockerfile: Dockerfile
     container_name: ms-digitalfix-notify
+    mem_limit: ${MS_NOTIFY_MEMORY:-320m}
     # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
     expose:
       - "8083"
@@ -238,6 +258,7 @@ services:
       - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:
       - digitalfix-net
     depends_on:
@@ -258,6 +279,7 @@ services:
       context: ../digitalfix-ms-admin-queues
       dockerfile: Dockerfile
     container_name: ms-admin-queues
+    mem_limit: ${MS_ADMIN_QUEUES_MEMORY:-320m}
     expose:
       - "8084"
     env_file:
@@ -275,6 +297,7 @@ services:
       - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
       # Los @RabbitListener viven en ms-notify: el control de listeners se delega a su API interna
       - MS_NOTIFY_URL=http://ms-digitalfix-notify:8083
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:
       - digitalfix-net
     depends_on:
@@ -297,6 +320,7 @@ services:
       context: ../digitalfix-bff-gateway
       dockerfile: Dockerfile
     container_name: digitalfix-bff-gateway
+    mem_limit: ${BFF_MEMORY:-320m}
     ports:
       - "${BFF_PORT:-8090}:8090"
     env_file:
@@ -313,6 +337,7 @@ services:
       - MS_CATALOG_URL=http://ms-catalog-service:8080
       - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:
       - digitalfix-net
     depends_on:
