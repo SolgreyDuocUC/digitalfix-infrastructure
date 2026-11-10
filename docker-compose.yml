@@ -184,10 +184,9 @@ services:
       - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
       # Stock de repuestos: se descuenta en ms-catalog al asignar la orden
       - MS_CATALOG_URL=http://ms-catalog-service:8080
-      # Productor de eventos: publica en cmd.direct (email.send, dispatch.ticket, report.gen)
-      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
-      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
-      - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
+      # Eventos de la OT (correo, despacho, informe): se entregan por HTTP a ms-admin-queues,
+      # dueño de la mensajería. ms-workorders no se conecta a RabbitMQ.
+      - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
@@ -195,11 +194,9 @@ services:
     networks:
       - digitalfix-net
     depends_on:
-      rabbitmq:
-        condition: service_healthy
-      rabbitmq-node2:
-        condition: service_healthy
       ms-catalog:
+        condition: service_started
+      ms-admin-queues:
         condition: service_started
     restart: unless-stopped
 
@@ -236,13 +233,15 @@ services:
   # ----------------------------------------------------------------------------
   # 6. Microservicio de Notificaciones y Despacho (digitalfix-ms-notify)
   # ----------------------------------------------------------------------------
+  # Solo lógica de negocio (correo, ticket de despacho, informe PDF): no se conecta a RabbitMQ.
+  # ms-admin-queues consume las colas y le entrega cada mensaje en /internal/v1/notificaciones/*.
   ms-notify:
     build:
       context: ../digitalfix-ms-notify/ms.notify
       dockerfile: Dockerfile
     container_name: ms-digitalfix-notify
     mem_limit: ${MS_NOTIFY_MEMORY:-320m}
-    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
+    # Sin "ports": solo accesible dentro de digitalfix-net (lo llama ms-admin-queues).
     expose:
       - "8083"
     env_file:
@@ -253,27 +252,22 @@ services:
     environment:
       - PORT=8083
       - SERVER_PORT=8083
-      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
-      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
-      - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:
       - digitalfix-net
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-      rabbitmq-node2:
-        condition: service_healthy
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
-  # 7. Administrador de Colas AMQP (digitalfix-ms-admin-queues)
+  # 7. Mensajería centralizada (digitalfix-ms-admin-queues)
   # ----------------------------------------------------------------------------
-  # API REST para administrar la topología de RabbitMQ (colas, exchanges,
-  # bindings y listeners). Solo dentro de digitalfix-net: se llega a través del
-  # BFF, que exige rol SUPERADMIN.
+  # Único microservicio conectado a RabbitMQ: declara la topología, publica los
+  # eventos de los productores (POST /internal/v1/eventos/{flujo}, lo llama
+  # ms-workorders), consume las colas y entrega cada mensaje por HTTP al
+  # microservicio de destino (ms-notify), con reintentos y DLQ. La API de
+  # administración (colas, exchanges, bindings, listeners) se llega a través del
+  # BFF, que exige rol SUPERADMIN; /internal/** no se enruta por el BFF.
   ms-admin-queues:
     build:
       context: ../digitalfix-ms-admin-queues
@@ -295,7 +289,7 @@ services:
       - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-admin}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin123}
       - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
-      # Los @RabbitListener viven en ms-notify: el control de listeners se delega a su API interna
+      # Destino de los flujos email, dispatch y report (app.rabbitmq.flujos.*.destino)
       - MS_NOTIFY_URL=http://ms-digitalfix-notify:8083
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:

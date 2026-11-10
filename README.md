@@ -30,9 +30,9 @@ El flujo de toda peticion autenticada hacia el backend es siempre el mismo:
 ```
 Cliente (Angular + MSAL) -> JWT -> [AWS API Gateway] -> digitalfix-bff-gateway -> microservicio de dominio
                                                                                    |
-                                     ms-workorders --(eventos)--> RabbitMQ --> ms-notify
-                                                                     ^
-                                                ms-admin-queues -----+ (administra la topologia)
+                     ms-workorders --HTTP--> ms-admin-queues <--AMQP--> RabbitMQ
+                                                   |  (topologia, publicacion, listeners, reintentos, DLQ)
+                                                   +--HTTP--> ms-notify (correo, despacho, informe)
 ```
 
 - **BFF (`digitalfix-bff-gateway`, puerto 8090):** unica puerta de entrada del frontend. Valida la firma, el issuer, el audience y la vigencia del JWT de Entra ID, exige el scope `access_as_user`, aplica la autorizacion por rol y enruta por la red interna `digitalfix-net`.
@@ -52,9 +52,9 @@ El sistema se desarrolla bajo una estrategia multi-repo: un repositorio por cada
 | [digitalfix-ms-login](https://github.com/Blacknight3648/digitalfix-ms-login.git) | Blacknight3648 | Spring Boot + Oracle | Autenticacion/sesion de aplicacion e integracion con el flujo de identidad; auditoria de intentos de login. | `/api/v1/login/*`, `/api/v1/audit/*` |
 | [digitalfix-bff-gateway](https://github.com/SolgreyDuocUC/digitalfix-bff-gateway.git) | SolgreyDuocUC | Spring Boot + Spring Security | BFF / gateway: valida el JWT y el rol, y enruta a los microservicios. | Publica: `:8090/api/**` |
 | [digitalfix-ms-user](https://github.com/Blacknight3648/digitalfix-ms-user.git) | Blacknight3648 | Spring Boot + Oracle | Usuarios, roles, empresas y areas; aprovisionamiento en el primer login. | `/api/user/*` |
-| [digitalfix-ms-workorders](https://github.com/Blacknight3648/digitalfix-ms-workorders.git) | Blacknight3648 | Spring Boot + Oracle + RabbitMQ | Ordenes de trabajo y de servicio, clientes, proveedores, cuadrillas, catalogo de servicios, regiones y comunas. **Productor** de eventos. | `/api/ordenes-trabajo/*`, `/api/clientes/*`, `/api/servicios/*`, ... |
-| [digitalfix-ms-notify](https://github.com/Blacknight3648/digitalfix-ms-notify.git) | Blacknight3648 | Spring Boot + RabbitMQ | **Consumidor** de colas: correos, tickets de despacho e informes; DLQ. | Interna: `/api/v1/listeners` |
-| [digitalfix-ms-admin-queues](https://github.com/Blacknight3648/digitalfix-ms-admin-queues.git) | Blacknight3648 | Spring Boot + Spring AMQP | **Administrador** de RabbitMQ: colas, exchanges, bindings y listeners. | `/api/v1/queues`, `/exchanges`, `/bindings`, `/listeners` (via BFF, SUPERADMIN) |
+| [digitalfix-ms-workorders](https://github.com/Blacknight3648/digitalfix-ms-workorders.git) | Blacknight3648 | Spring Boot + Oracle | Ordenes de trabajo y de servicio, clientes, proveedores, cuadrillas, catalogo de servicios, regiones y comunas. **Productor** de eventos (los entrega por HTTP a ms-admin-queues). | `/api/ordenes-trabajo/*`, `/api/clientes/*`, `/api/servicios/*`, ... |
+| [digitalfix-ms-notify](https://github.com/Blacknight3648/digitalfix-ms-notify.git) | Blacknight3648 | Spring Boot | Logica de negocio de las comunicaciones: correos, tickets de despacho e informes. Sin RabbitMQ: recibe los mensajes de ms-admin-queues. | Interna: `/internal/v1/notificaciones/*` |
+| [digitalfix-ms-admin-queues](https://github.com/Blacknight3648/digitalfix-ms-admin-queues.git) | Blacknight3648 | Spring Boot + Spring AMQP | **Mensajeria centralizada**: unico servicio conectado a RabbitMQ. Topologia, publicacion de eventos, listeners con entrega HTTP a los destinos, reintentos y DLQ, y administracion. | `/api/v1/queues`, `/exchanges`, `/bindings`, `/listeners` (via BFF, SUPERADMIN); interna: `/internal/v1/eventos/{flujo}` |
 | [digitalfix-ms-catalog](https://github.com/SolgreyDuocUC/digitalfix-ms-catalog.git) | SolgreyDuocUC | Spring Boot + Oracle | CRUD de servicios tecnicos, tarifas y stock de repuestos. | `/api/catalog/*` |
 | [digitalfix-ms-report](https://github.com/SolgreyDuocUC/digitalfix-ms-report.git) | SolgreyDuocUC | Spring Boot + Kafka + Oracle | Consumidor de eventos; agregaciones y KPIs de lectura. | `/api/report/*` (solo lectura) |
 | [digitalfix-ms-audit](https://github.com/SolgreyDuocUC/digitalfix-ms-audit.git) | SolgreyDuocUC | Spring Boot + Kafka + Oracle | Consumidor de eventos; persistencia y consulta del timeline. | `/api/audit/*` (solo lectura) |
@@ -121,14 +121,14 @@ Roles en la mensajeria:
 
 | Rol | Componente | Detalle |
 |---|---|---|
-| Productor | `ms-workorders` | Publica en `cmd.direct` despues del commit de la transaccion: OT creada o cambio de estado (`email.send`), cuadrilla asignada (`dispatch.ticket`), OT cerrada (`report.gen`). |
-| Consumidor | `ms-notify` | Declara la topologia (`RabbitMQConfig`). Tiene un `@RabbitListener` por dominio, con ACK manual. Ante un error definitivo hace NACK y el mensaje va a la DLQ; ante un error transitorio reintenta hasta 3 veces (`x-retry-count`) y despues lo envia a la DLQ. |
-| Administrador | `ms-admin-queues` | API REST para colas, exchanges y bindings, con control de listeners. Protege `q.cmd.*` y `cmd.*` contra el borrado. Se usa desde el panel **Mensajeria** del frontend (SUPERADMIN). |
+| Mensajeria centralizada | `ms-admin-queues` | **Unico servicio conectado a RabbitMQ.** Declara la topologia (`TopologiaRabbitConfig`, desde `app.rabbitmq`), publica los eventos que recibe por `POST /internal/v1/eventos/{flujo}` (espera el publisher confirm), consume cada cola con ACK manual y entrega el mensaje por HTTP al destino del flujo. Respuesta 4xx del destino: NACK y DLQ; 5xx o sin respuesta: reintenta hasta 3 veces (`x-retry-count`) y despues DLQ. Tambien expone la API de colas, exchanges, bindings y listeners (panel **Mensajeria**, SUPERADMIN) y protege `q.cmd.*` y `cmd.*` contra el borrado. |
+| Productor | `ms-workorders` | Solo negocio: despues del commit entrega a ms-admin-queues los avisos de la OT (flujo `email` con el estado como subtipo, `dispatch` al asignar cuadrilla, `report` al cerrar). No conoce colas ni exchanges. |
+| Destino | `ms-notify` | Solo negocio: recibe los mensajes en `/internal/v1/notificaciones/{email,despacho,informe}` y responde 2xx/4xx/5xx segun el resultado. |
 
 En la plataforma centralizada el broker es un clúster de 2 nodos del `docker-compose.yml` raiz: `rabbitmq` (`rabbit@rabbitmq-node1`, al que conectan los microservicios) y `rabbitmq-node2` (`rabbit@rabbitmq-node2`):
 - Clúster: peer discovery `classic_config` (`mq/rabbitmq-cluster.conf`) y Erlang cookie compartida (`RABBITMQ_ERLANG_COOKIE`). Verificación: `docker exec digitalfix-rabbitmq-node1 rabbitmqctl cluster_status`.
-- Colas quorum: las 6 colas de ms-notify se replican en ambos nodos. Con 2 nodos, si cae uno las colas se detienen hasta que vuelva (la mayoría es 2/2), pero no se pierden mensajes.
-- Failover del cliente: ms-notify, ms-workorders y ms-admin-queues conectan con `RABBITMQ_ADDRESSES=rabbitmq-node1:5672,rabbitmq-node2:5672` y se reconectan al otro nodo si cae el suyo.
+- Colas quorum: las 6 colas de la topologia se replican en ambos nodos. Con 2 nodos, si cae uno las colas se detienen hasta que vuelva (la mayoría es 2/2), pero no se pierden mensajes.
+- Failover del cliente: ms-admin-queues (unico cliente AMQP) conecta con `RABBITMQ_ADDRESSES=rabbitmq-node1:5672,rabbitmq-node2:5672` y se reconecta al otro nodo si cae el suyo.
 - AMQP 5672: solo dentro de `digitalfix-net`.
 - Consola de administracion: publicada solo en `127.0.0.1:15672` (node1) y `127.0.0.1:15673` (node2). En la nube se abre por tunel SSH (`ssh -L 15672:localhost:15672 usuario@servidor`).
 - Credenciales: `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` del `.env`.
@@ -188,8 +188,8 @@ Contenedores que se levantan (red `digitalfix-net`):
 | `digitalfix-rabbitmq-node2` | `127.0.0.1:15673` (consola) | 5672 / 15672 | Broker, nodo 2 del clúster |
 | `ms-login-service` | — | 8081 | Sesion y auditoria de accesos |
 | `ms-user-service` | — | 8082 | Usuarios y roles |
-| `ms-digitalfix-notify` | — | 8083 | Consumidor de colas |
-| `ms-admin-queues` | — | 8084 | Administrador de RabbitMQ |
+| `ms-digitalfix-notify` | — | 8083 | Correos, despacho e informes (recibe de ms-admin-queues) |
+| `ms-admin-queues` | — | 8084 | Mensajeria centralizada (RabbitMQ) |
 | `ms-workorders-service` | — | 8080 | Ordenes de trabajo (productor) |
 | `ms-catalog-service` | — | 8080 | Catalogo (en desarrollo) |
 
