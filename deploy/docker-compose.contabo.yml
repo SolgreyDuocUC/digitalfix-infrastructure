@@ -1,0 +1,371 @@
+# ==============================================================================
+# DIGITALFIX - DOCKER COMPOSE PARA CONTABO VPS (PORTAINER + CADDY HTTPS)
+# ==============================================================================
+# Orquesta la plataforma completa de DigitalFix en Contabo VPS:
+#   - 1 Proxy inverso Caddy con HTTPS automático (Let's Encrypt)
+#   - 1 Frontend Angular en Nginx (puerto 80 interno)
+#   - 1 BFF / API Gateway (puerto 8090 interno)
+#   - 6 Microservicios Spring Boot (Login, User, Workorders, Catalog, Notify, Admin Queues)
+#   - 1 Clúster RabbitMQ de 2 nodos (rabbitmq-node1 + rabbitmq-node2)
+#
+# Dominio configurado: digitalfix-sa-con.duckdns.org
+# Red externa: digitalfix-net
+# ==============================================================================
+
+name: digitalfix-infrastructure
+
+# ------------------------------------------------------------------------------
+# Redes
+# ------------------------------------------------------------------------------
+networks:
+  digitalfix-net:
+    name: digitalfix-net
+    external: true
+
+# ------------------------------------------------------------------------------
+# Volúmenes para certificados y configuración de Caddy
+# ------------------------------------------------------------------------------
+volumes:
+  caddy_data:
+  caddy_config:
+
+services:
+
+  # ----------------------------------------------------------------------------
+  # 1. Broker de Mensajería: RabbitMQ Nodo 1 (semilla)
+  # ----------------------------------------------------------------------------
+  rabbitmq:
+    image: digitalfix-infrastructure-rabbitmq:latest
+    container_name: digitalfix-rabbitmq-node1
+    mem_limit: ${RABBITMQ_MEMORY:-384m}
+    hostname: rabbitmq-node1
+    expose:
+      - "5672"
+    ports:
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin123}
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-digitalfix-cluster-cookie}
+    volumes:
+      - ${RABBITMQ_CONF_PATH:-../mq/rabbitmq-cluster.conf}:/etc/rabbitmq/conf.d/20-cluster.conf:ro
+    networks:
+      digitalfix-net:
+        aliases:
+          - rabbitmq-node1
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 1b. Broker de Mensajería: RabbitMQ Nodo 2
+  # ----------------------------------------------------------------------------
+  rabbitmq-node2:
+    image: digitalfix-infrastructure-rabbitmq-node2:latest
+    container_name: digitalfix-rabbitmq-node2
+    mem_limit: ${RABBITMQ_MEMORY:-384m}
+    hostname: rabbitmq-node2
+    expose:
+      - "5672"
+    ports:
+      - "127.0.0.1:${RABBITMQ_NODE2_MANAGEMENT_PORT:-15673}:15672"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-digitalfix-cluster-cookie}
+    volumes:
+      - ${RABBITMQ_CONF_PATH:-../mq/rabbitmq-cluster.conf}:/etc/rabbitmq/conf.d/20-cluster.conf:ro
+    networks:
+      - digitalfix-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 2. Microservicio de Autenticación y Autorización (digitalfix-ms-login)
+  # ----------------------------------------------------------------------------
+  ms-login:
+    image: digitalfix-infrastructure-ms-login:latest
+    container_name: ms-login-service
+    mem_limit: ${MS_LOGIN_MEMORY:-448m}
+    expose:
+      - "8081"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      - PORT=8081
+      - SERVER_PORT=8081
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL}
+      - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME:-ADMIN}
+      - SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD}
+      - TNS_ADMIN=/app/wallet
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://digitalfix-sa-con.duckdns.org}
+      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    volumes:
+      - ${WALLET_PATH:-./wallet}:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 3. Microservicio de Usuarios y Clientes (digitalfix-ms-user)
+  # ----------------------------------------------------------------------------
+  ms-user:
+    image: digitalfix-infrastructure-ms-user:latest
+    container_name: ms-user-service
+    mem_limit: ${MS_USER_MEMORY:-448m}
+    expose:
+      - "8082"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      - PORT=8082
+      - SERVER_PORT=8082
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL}
+      - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME:-ADMIN}
+      - SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD}
+      - DB_URL=${SPRING_DATASOURCE_URL}
+      - DB_USERNAME=${SPRING_DATASOURCE_USERNAME:-ADMIN}
+      - DB_PASSWORD=${SPRING_DATASOURCE_PASSWORD}
+      - TNS_ADMIN=/app/wallet
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://digitalfix-sa-con.duckdns.org}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    volumes:
+      - ${WALLET_PATH:-./wallet}:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 4. Microservicio de Órdenes de Trabajo (digitalfix-ms-workorders)
+  # ----------------------------------------------------------------------------
+  ms-workorders:
+    image: digitalfix-infrastructure-ms-workorders:latest
+    container_name: ms-workorders-service
+    mem_limit: ${MS_WORKORDERS_MEMORY:-448m}
+    expose:
+      - "8080"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      - SERVER_PORT=8080
+      - PORT=8080
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL}
+      - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME:-ADMIN}
+      - SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD}
+      - TNS_ADMIN=/app/wallet
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://digitalfix-sa-con.duckdns.org}
+      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - MS_CATALOG_URL=http://ms-catalog-service:8080
+      - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    volumes:
+      - ${WALLET_PATH:-./wallet}:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    depends_on:
+      - ms-catalog
+      - ms-admin-queues
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 5. Microservicio de Catálogo de Servicios y Repuestos (digitalfix-ms-catalog)
+  # ----------------------------------------------------------------------------
+  ms-catalog:
+    image: digitalfix-infrastructure-ms-catalog:latest
+    container_name: ms-catalog-service
+    mem_limit: ${MS_CATALOG_MEMORY:-448m}
+    expose:
+      - "8080"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      - SERVER_PORT=8080
+      - PORT=8080
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL}
+      - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME:-ADMIN}
+      - SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD}
+      - TNS_ADMIN=/app/wallet
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://digitalfix-sa-con.duckdns.org}
+      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    volumes:
+      - ${WALLET_PATH:-./wallet}:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 6. Microservicio de Notificaciones y Despacho (digitalfix-ms-notify)
+  # ----------------------------------------------------------------------------
+  ms-notify:
+    image: digitalfix-infrastructure-ms-notify:latest
+    container_name: ms-digitalfix-notify
+    mem_limit: ${MS_NOTIFY_MEMORY:-320m}
+    expose:
+      - "8083"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      - PORT=8083
+      - SERVER_PORT=8083
+      - SPRING_MAIL_HOST=${SPRING_MAIL_HOST:-smtp.mailtrap.io}
+      - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-2525}
+      - SPRING_MAIL_USERNAME=${SPRING_MAIL_USERNAME}
+      - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://digitalfix-sa-con.duckdns.org}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    networks:
+      - digitalfix-net
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 7. Mensajería centralizada (digitalfix-ms-admin-queues)
+  # ----------------------------------------------------------------------------
+  ms-admin-queues:
+    image: digitalfix-infrastructure-ms-admin-queues:latest
+    container_name: ms-admin-queues
+    mem_limit: ${MS_ADMIN_QUEUES_MEMORY:-320m}
+    expose:
+      - "8084"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      - PORT=8084
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_ADDRESSES=${RABBITMQ_ADDRESSES:-rabbitmq-node1:5672,rabbitmq-node2:5672}
+      - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin123}
+      - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
+      - MS_NOTIFY_URL=http://ms-digitalfix-notify:8083
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    networks:
+      - digitalfix-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      rabbitmq-node2:
+        condition: service_healthy
+      ms-notify:
+        condition: service_started
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 8. BFF / API Gateway (digitalfix-bff-gateway)
+  # ----------------------------------------------------------------------------
+  bff-gateway:
+    image: digitalfix-infrastructure-bff-gateway:latest
+    container_name: digitalfix-bff-gateway
+    mem_limit: ${BFF_MEMORY:-320m}
+    expose:
+      - "8090"
+    ports:
+      - "127.0.0.1:${BFF_PORT:-8090}:8090"
+    env_file:
+      - path: .env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      - SERVER_PORT=8090
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://digitalfix-sa-con.duckdns.org}
+      - MS_LOGIN_URL=http://ms-login-service:8081
+      - MS_USER_URL=http://ms-user-service:8082
+      - MS_WORKORDERS_URL=http://ms-workorders-service:8080
+      - MS_CATALOG_URL=http://ms-catalog-service:8080
+      - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    networks:
+      - digitalfix-net
+    depends_on:
+      - ms-login
+      - ms-user
+      - ms-workorders
+      - ms-catalog
+      - ms-admin-queues
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 9. Frontend Angular en Nginx (digitalfix-frontend)
+  # Escucha internamente en el puerto 80 del contenedor.
+  # ----------------------------------------------------------------------------
+  frontend:
+    image: digitalfix-infrastructure-frontend:latest
+    container_name: digitalfix-frontend
+    mem_limit: ${FRONTEND_MEMORY:-256m}
+    expose:
+      - "80"
+    networks:
+      - digitalfix-net
+    depends_on:
+      - bff-gateway
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 10. Proxy inverso Caddy con HTTPS automático (Let's Encrypt)
+  # ----------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: digitalfix-caddy
+    mem_limit: ${CADDY_MEMORY:-64m}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.contabo:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - digitalfix-net
+    depends_on:
+      - frontend
+      - bff-gateway
+    restart: unless-stopped

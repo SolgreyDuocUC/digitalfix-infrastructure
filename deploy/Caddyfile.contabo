@@ -1,0 +1,24 @@
+# ==============================================================================
+# DIGITALFIX - Caddyfile para Contabo VPS con Portainer
+# Dominio: digitalfix-sa-con.duckdns.org
+# ==============================================================================
+# Caddy v2 gestiona automáticamente los certificados TLS de Let's Encrypt
+# y la redirección HTTP -> HTTPS.
+#
+# Enrutamiento:
+#   - Peticiones API  (/api/*) -> http://digitalfix-bff-gateway:8090
+#   - Tráfico web general (/*) -> http://digitalfix-frontend:80
+# ==============================================================================
+
+digitalfix-sa-con.duckdns.org {
+
+    # Enrutamiento de la API hacia el BFF Gateway
+    handle /api/* {
+        reverse_proxy http://digitalfix-bff-gateway:8090
+    }
+
+    # Enrutamiento del tráfico web general hacia el frontend Angular (Nginx)
+    handle {
+        reverse_proxy http://digitalfix-frontend:80
+    }
+}
