@@ -17,15 +17,6 @@
 #     sin generar errores en caso de que falten (required: false).
 # ==============================================================================
 
-# Memoria (EC2 t3.medium, 4 GB): cada contenedor tiene mem_limit. Sin limite, cada
-# JVM reserva por defecto hasta el 25 % de la RAM del host (~1 GB) y las 7 JVM +
-# 2 nodos RabbitMQ suman mas de 7 GB: la instancia entra en swap, el GC no para,
-# el kernel mata contenedores (OOM) y cada servicio tarda minutos en arrancar.
-# Reparto: 4 servicios con Oracle x 448m + BFF/notify/admin-queues x 320m +
-# 2 RabbitMQ x 384m = ~3.5 GB. JDK_JAVA_OPTIONS (JVM_MEMORY_OPTS) dimensiona el
-# heap al 60 % del limite y deja el resto para metaspace, hilos y buffers.
-# Si un servicio muere con OOMKilled, sube su variable *_MEMORY en el .env.
-
 networks:
   digitalfix-net:
     name: digitalfix-net
@@ -36,24 +27,11 @@ services:
   # ----------------------------------------------------------------------------
   # 1. Broker de Mensajería: Clúster RabbitMQ de 2 nodos con Consola Web
   # ----------------------------------------------------------------------------
-  # El clúster se forma con peer discovery "classic_config"
-  # (mq/rabbitmq-cluster.conf): ambos nodos comparten la Erlang cookie y se
-  # encuentran por su hostname (rabbit@rabbitmq-node1 / rabbit@rabbitmq-node2).
-  # Usuarios, vhosts, exchanges y colas son comunes a todo el clúster.
-  # Verificación: docker exec digitalfix-rabbitmq-node1 rabbitmqctl cluster_status
-
-  # Nodo 1 (semilla). El servicio se sigue llamando "rabbitmq" para que los
-  # microservicios conecten con RABBITMQ_HOST=rabbitmq sin cambios.
   rabbitmq:
     image: rabbitmq:3.12-management-alpine
     container_name: digitalfix-rabbitmq-node1
     mem_limit: ${RABBITMQ_MEMORY:-384m}
     hostname: rabbitmq-node1
-    # AMQP (5672) solo dentro de digitalfix-net: ms-notify se conecta por el
-    # nombre "rabbitmq". La consola web (15672) se publica solo en 127.0.0.1:
-    # se abre en http://localhost:15672 desde la misma máquina y, en la nube,
-    # por túnel SSH (ssh -L 15672:localhost:15672 usuario@servidor); nunca
-    # queda expuesta a internet aunque el security group abra el puerto.
     expose:
       - "5672"    # AMQP
     ports:
@@ -75,7 +53,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Nodo 2: arranca cuando node1 está sano y se une a su clúster.
   rabbitmq-node2:
     image: rabbitmq:3.12-management-alpine
     container_name: digitalfix-rabbitmq-node2
@@ -110,7 +87,6 @@ services:
       dockerfile: Dockerfile
     container_name: ms-login-service
     mem_limit: ${MS_LOGIN_MEMORY:-448m}
-    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
     expose:
       - "8081"
     env_file:
@@ -119,6 +95,7 @@ services:
     environment:
       - PORT=8081
       - SERVER_PORT=8081
+      - TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
@@ -127,7 +104,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digitalfix-ms-login/wallet:/app/wallet:ro
+      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
     networks:
       - digitalfix-net
     restart: unless-stopped
@@ -141,7 +118,6 @@ services:
       dockerfile: Dockerfile
     container_name: ms-user-service
     mem_limit: ${MS_USER_MEMORY:-448m}
-    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
     expose:
       - "8082"
     env_file:
@@ -150,6 +126,7 @@ services:
     environment:
       - PORT=8082
       - SERVER_PORT=8082
+      - TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
@@ -157,7 +134,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digitalfix-ms-user/wallet:/app/wallet:ro
+      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
     networks:
       - digitalfix-net
     restart: unless-stopped
@@ -171,7 +148,6 @@ services:
       dockerfile: Dockerfile
     container_name: ms-workorders-service
     mem_limit: ${MS_WORKORDERS_MEMORY:-448m}
-    # Sin "ports": solo accesible dentro de digitalfix-net (lo consume el BFF).
     expose:
       - "8080"
     env_file:
@@ -180,12 +156,10 @@ services:
     environment:
       - SERVER_PORT=8080
       - PORT=8080
+      - TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
-      # Stock de repuestos: se descuenta en ms-catalog al asignar la orden
       - MS_CATALOG_URL=http://ms-catalog-service:8080
-      # Eventos de la OT (correo, despacho, informe): se entregan por HTTP a ms-admin-queues,
-      # dueño de la mensajería. ms-workorders no se conecta a RabbitMQ.
       - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
@@ -193,7 +167,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digitalfix-ms-workorders/wallet:/app/wallet:ro
+      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
     networks:
       - digitalfix-net
     depends_on:
@@ -212,7 +186,6 @@ services:
       dockerfile: Dockerfile
     container_name: ms-catalog-service
     mem_limit: ${MS_CATALOG_MEMORY:-448m}
-    # Sin "ports": solo accesible dentro de digitalfix-net (lo consumen el BFF y ms-workorders).
     expose:
       - "8080"
     env_file:
@@ -221,6 +194,7 @@ services:
     environment:
       - SERVER_PORT=8080
       - PORT=8080
+      - TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
@@ -229,7 +203,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digitalfix-ms-catalog/wallet:/app/wallet:ro
+      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
     networks:
       - digitalfix-net
     restart: unless-stopped
@@ -237,15 +211,12 @@ services:
   # ----------------------------------------------------------------------------
   # 6. Microservicio de Notificaciones y Despacho (digitalfix-ms-notify)
   # ----------------------------------------------------------------------------
-  # Solo lógica de negocio (correo, ticket de despacho, informe PDF): no se conecta a RabbitMQ.
-  # ms-admin-queues consume las colas y le entrega cada mensaje en /internal/v1/notificaciones/*.
   ms-notify:
     build:
       context: ../digitalfix-ms-notify
       dockerfile: Dockerfile
     container_name: ms-digitalfix-notify
     mem_limit: ${MS_NOTIFY_MEMORY:-320m}
-    # Sin "ports": solo accesible dentro de digitalfix-net (lo llama ms-admin-queues).
     expose:
       - "8083"
     env_file:
@@ -267,12 +238,6 @@ services:
   # ----------------------------------------------------------------------------
   # 7. Mensajería centralizada (digitalfix-ms-admin-queues)
   # ----------------------------------------------------------------------------
-  # Único microservicio conectado a RabbitMQ: declara la topología, publica los
-  # eventos de los productores (POST /internal/v1/eventos/{flujo}, lo llama
-  # ms-workorders), consume las colas y entrega cada mensaje por HTTP al
-  # microservicio de destino (ms-notify), con reintentos y DLQ. La API de
-  # administración (colas, exchanges, bindings, listeners) se llega a través del
-  # BFF, que exige rol SUPERADMIN; /internal/** no se enruta por el BFF.
   ms-admin-queues:
     build:
       context: ../digitalfix-ms-admin-queues
@@ -292,7 +257,6 @@ services:
       - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-admin}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin123}
       - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
-      # Destino de los flujos email, dispatch y report (app.rabbitmq.flujos.*.destino)
       - MS_NOTIFY_URL=http://ms-digitalfix-notify:8083
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:
@@ -309,9 +273,6 @@ services:
   # ----------------------------------------------------------------------------
   # 8. BFF / API Gateway (digitalfix-bff-gateway)
   # ----------------------------------------------------------------------------
-  # Única puerta de entrada del frontend: valida el JWT de Entra ID (firma,
-  # issuer, audience, vigencia, scope y rol) y enruta a ms-login, ms-user,
-  # ms-workorders, ms-catalog y ms-admin-queues por la red interna digitalfix-net.
   bff-gateway:
     build:
       context: ../digitalfix-bff-gateway
