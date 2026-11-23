@@ -104,7 +104,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
+      - ../digitalfix-ms-login/wallet:/app/wallet:ro
     networks:
       - digitalfix-net
     restart: unless-stopped
@@ -134,7 +134,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
+      - ../digitalfix-ms-user/wallet:/app/wallet:ro
     networks:
       - digitalfix-net
     restart: unless-stopped
@@ -167,7 +167,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
+      - ../digitalfix-ms-workorders/wallet:/app/wallet:ro
     networks:
       - digitalfix-net
     depends_on:
@@ -203,7 +203,7 @@ services:
       - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     volumes:
-      - ../digital-fix-db-configuration/Wallet_CLX44JOCT2DJMLZ9:/app/wallet:ro
+      - ../digitalfix-ms-catalog/wallet:/app/wallet:ro
     networks:
       - digitalfix-net
     restart: unless-stopped
