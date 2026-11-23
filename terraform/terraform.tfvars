@@ -34,7 +34,7 @@ bff_port      = 8090
 # --- Base de Datos Oracle Autonomous ---
 spring_datasource_url      = "jdbc:oracle:thin:@clx44joct2djmlz9_high?TNS_ADMIN=./wallet"
 spring_datasource_username = "ADMIN"
-spring_datasource_password = "Anastasia1110."   # <-- cambiar si es necesario
+spring_datasource_password = "Anastasia1106."   # <-- cambiar si es necesario
 
 # --- Microsoft Entra ID ---
 azure_tenant_id = "3fb8463e-0e33-4b7d-adc1-2a47c707831e"
