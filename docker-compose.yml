@@ -3,9 +3,10 @@
 # ==============================================================================
 # Orquesta la plataforma completa de DigitalFix desde una sola ubicación:
 #   - 1 Frontend Angular SSR
-#   - 6 Microservicios Spring Boot (Login, User, Workorders, Catalog, Notify, Admin Queues)
+#   - 7 Microservicios Spring Boot (Login, User, Workorders, Catalog, Notify, Admin Queues, Report)
 #   - 1 BFF / API Gateway (valida el JWT y enruta a los microservicios)
 #   - 1 Clúster RabbitMQ de 2 nodos (rabbitmq-node1 + rabbitmq-node2)
+#   - 1 Broker Apache Kafka en modo KRaft (kafka)
 #
 # Uso rápido:
 #   cd digitalfix-infrastructure
@@ -22,6 +23,9 @@ networks:
     name: digitalfix-net
     driver: bridge
 
+volumes:
+  kafka-data:
+
 services:
 
   # ----------------------------------------------------------------------------
@@ -33,9 +37,9 @@ services:
     mem_limit: ${RABBITMQ_MEMORY:-384m}
     hostname: rabbitmq-node1
     expose:
-      - "5672"    # AMQP
+      - "5672" # AMQP
     ports:
-      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"   # Consola web de administración
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672" # Consola web de administración
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-admin}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin123}
@@ -45,7 +49,7 @@ services:
     networks:
       digitalfix-net:
         aliases:
-          - rabbitmq-node1   # nombre que usa node2 para encontrarlo
+          - rabbitmq-node1 # nombre que usa node2 para encontrarlo
     healthcheck:
       test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
       interval: 10s
@@ -59,9 +63,9 @@ services:
     mem_limit: ${RABBITMQ_MEMORY:-384m}
     hostname: rabbitmq-node2
     expose:
-      - "5672"    # AMQP
+      - "5672" # AMQP
     ports:
-      - "127.0.0.1:${RABBITMQ_NODE2_MANAGEMENT_PORT:-15673}:15672"   # Consola web del nodo 2
+      - "127.0.0.1:${RABBITMQ_NODE2_MANAGEMENT_PORT:-15673}:15672" # Consola web del nodo 2
     environment:
       RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-digitalfix-cluster-cookie}
     volumes:
@@ -79,7 +83,45 @@ services:
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
-  # 2. Microservicio de Autenticación y Autorización (digitalfix-ms-login)
+  # 1b. Broker de Eventos: Apache Kafka (modo KRaft, sin Zookeeper)
+  # ----------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: digitalfix-kafka
+    hostname: kafka
+    mem_limit: ${KAFKA_MEMORY:-512m}
+    expose:
+      - "9092" # Clientes internos en digitalfix-net
+    ports:
+      - "127.0.0.1:${KAFKA_PORT:-9094}:9094" # Acceso opcional desde el host (localhost:9094)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - digitalfix-net
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
   # ----------------------------------------------------------------------------
   ms-login:
     build:
@@ -167,6 +209,7 @@ services:
       - MS_USER_URL=http://ms-user-service:8082
       - MS_CATALOG_URL=http://ms-catalog-service:8080
       - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
       - SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT=${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:-30000}
@@ -177,6 +220,8 @@ services:
     networks:
       - digitalfix-net
     depends_on:
+      kafka:
+        condition: service_healthy
       ms-catalog:
         condition: service_started
       ms-admin-queues:
@@ -266,6 +311,7 @@ services:
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin123}
       - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
       - MS_NOTIFY_URL=http://ms-digitalfix-notify:8083
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:
       - digitalfix-net
@@ -274,12 +320,51 @@ services:
         condition: service_healthy
       rabbitmq-node2:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
       ms-notify:
         condition: service_started
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
-  # 8. BFF / API Gateway (digitalfix-bff-gateway)
+  # 8. Microservicio de Reportes y KPIs (digitalfix-ms-report)
+  # ----------------------------------------------------------------------------
+  ms-report:
+    build:
+      context: ../digitalfix-ms-report
+      dockerfile: Dockerfile
+    container_name: ms-report-service
+    mem_limit: ${MS_REPORT_MEMORY:-448m}
+    expose:
+      - "8086"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      - PORT=8086
+      - SERVER_PORT=8086
+      - MS_USER_URL=http://ms-user-service:8082
+      - TNS_ADMIN=/app/wallet
+      - SPRING_DATASOURCE_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
+      - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
+      - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
+      - SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT=${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:-30000}
+      - SPRING_FLYWAY_TABLE=flyway_schema_history_report
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - JWT_ISSUER_URI=${JWT_ISSUER_URI:-https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0}
+      - JAVA_OPTS=${JAVA_OPTS:--Djava.net.preferIPv4Stack=true}
+      - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
+    volumes:
+      - ../digitalfix-ms-report/wallet:/app/wallet:ro
+    networks:
+      - digitalfix-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 9. BFF / API Gateway (digitalfix-bff-gateway)
   # ----------------------------------------------------------------------------
   bff-gateway:
     build:
@@ -300,6 +385,7 @@ services:
       - MS_WORKORDERS_URL=http://ms-workorders-service:8080
       - MS_CATALOG_URL=http://ms-catalog-service:8080
       - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
+      - MS_REPORT_URL=http://ms-report-service:8086
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
       - SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT=${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:-30000}
@@ -313,10 +399,11 @@ services:
       - ms-workorders
       - ms-catalog
       - ms-admin-queues
+      - ms-report
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
-  # 9. Frontend Web SPA / SSR (digitalfix-frontend)
+  # 10. Frontend Web SPA / SSR (digitalfix-frontend)
   # ----------------------------------------------------------------------------
   frontend:
     build:
