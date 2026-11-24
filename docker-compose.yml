@@ -96,8 +96,10 @@ services:
       - PORT=8081
       - SERVER_PORT=8081
       - TNS_ADMIN=/app/wallet
+      - SPRING_DATASOURCE_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
+      - DB_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - MS_USER_URL=http://ms-user-service:8082
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
       - SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT=${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:-30000}
@@ -127,6 +129,8 @@ services:
       - PORT=8082
       - SERVER_PORT=8082
       - TNS_ADMIN=/app/wallet
+      - SPRING_DATASOURCE_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
+      - DB_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
@@ -157,8 +161,10 @@ services:
       - SERVER_PORT=8080
       - PORT=8080
       - TNS_ADMIN=/app/wallet
+      - SPRING_DATASOURCE_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
+      - DB_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - MS_USER_URL=http://ms-user-service:8082
       - MS_CATALOG_URL=http://ms-catalog-service:8080
       - MS_ADMIN_QUEUES_URL=http://ms-admin-queues:8084
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
@@ -195,8 +201,10 @@ services:
       - SERVER_PORT=8080
       - PORT=8080
       - TNS_ADMIN=/app/wallet
+      - SPRING_DATASOURCE_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
+      - DB_URL=jdbc:oracle:thin:@clx44joct2djmlz9_low?TNS_ADMIN=/app/wallet
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
-      - MS_USER_URL=${MS_USER_URL:-http://ms-user-service:8082}
+      - MS_USER_URL=http://ms-user-service:8082
       - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-3}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-1}
       - SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT=${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:-30000}
