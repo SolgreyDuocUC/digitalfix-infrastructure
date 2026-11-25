@@ -1,12 +1,6 @@
 name: Deploy Backend to AWS EC2
 
 on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - "deploy/deploy-main.sh"
-      - "docker-compose.yml"
-      - "mq/**"
   workflow_dispatch:
     inputs:
       service:
@@ -24,8 +18,6 @@ on:
           - ms-catalog
           - ms-notify
           - ms-admin-queues
-  repository_dispatch:
-    types: [ deploy-main ]
 
 concurrency:
   group: deploy-backend-main
@@ -33,6 +25,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
