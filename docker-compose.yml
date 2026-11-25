@@ -196,6 +196,8 @@ services:
     mem_limit: ${MS_WORKORDERS_MEMORY:-448m}
     expose:
       - "8080"
+    ports:
+      - "127.0.0.1:${MS_WORKORDERS_HOST_PORT:-8085}:8080" # Acceso del portal cliente (monolito) desde el host
     env_file:
       - path: .env
         required: true
@@ -239,6 +241,8 @@ services:
     mem_limit: ${MS_CATALOG_MEMORY:-448m}
     expose:
       - "8080"
+    ports:
+      - "127.0.0.1:${MS_CATALOG_HOST_PORT:-8088}:8080" # Acceso del portal cliente (monolito) desde el host
     env_file:
       - path: .env
         required: true
@@ -311,6 +315,7 @@ services:
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin123}
       - RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VIRTUAL_HOST:-/}
       - MS_NOTIFY_URL=http://ms-digitalfix-notify:8083
+      - MS_USER_URL=http://ms-user-service:8082
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - JDK_JAVA_OPTIONS=${JVM_MEMORY_OPTS:--XX:MaxRAMPercentage=60 -XX:+UseSerialGC -Xss512k}
     networks:
