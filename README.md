@@ -397,6 +397,7 @@ El equipo gestiona todo el desarrollo del proyecto semestral con Kanban sobre Gi
 ## 10. Estandares operativos
 
 - Seguridad de credenciales: no almacenar secretos productivos en ningun repositorio. En entornos productivos (AWS EC2) las credenciales se suministran mediante variables de entorno del sistema o AWS Secrets Manager.
-- Segregacion de despliegue: la separacion en carpetas (`apps`, `kafka`, `mq`) permite desplegar cada componente de manera independiente en instancias EC2 especificas (`ec2-apps`, `ec2-kafka`, `ec2-mq`) o en un entorno de desarrollo local consolidado.
+- Segregacion de despliegue: la separacion en carpetas (`apps`, `kafka`, `mq`) permite desplegar cada componente de manera independiente en instancias EC2 especificas (`ec2-apps`, `ec2-kafka`, `ec2-mq`) o en un entorno de  Desarrpolladores: DUOC UC
+desarrollo local consolidado.
 - Red interna: todo nuevo contenedor o servicio agregado debe asociarse explicitamente a la red `digitalfix-net` para garantizar la resolucion DNS y conectividad entre microservicios y brokers.
 - Trazabilidad: todo Pull Request mergeado debe estar vinculado a un Issue, verificable directamente en GitHub; no se aceptan cierres manuales de tarjetas sin codigo asociado.
